@@ -13,10 +13,25 @@
   --color-pink-light:   #FFD6DF;
   --color-lavender:     #C9B8E8;
   --color-lavender-light: #E4DBFF;
-  --color-text:         #4A4A4A;
-  --color-text-muted:   #9B9B9B;
+  --color-body:         #4A4A4A;  /* 本文テキスト */
+  --color-muted:        #9B9B9B;  /* サブテキスト */
   --color-accent-happy: #FFE566;  /* にょわり */
   --color-accent-angry: #FF8B8B;  /* おこ */
+
+  /* Mood 別グラデーション色 */
+  --color-furious-from: #FF8B8B;
+  --color-furious-to:   #FF6464;
+  --color-grumpy-from:  #A8A8A8;
+  --color-grumpy-to:    #C0C0C0;
+  /* Neutral: from-pink to-lavender（既存変数を流用） */
+  --color-rested-from:  #FFD700;
+  --color-rested-to:    #FFA040;
+  --color-sleepy-from:  #9BB5D4;
+  /* Sleepy to: to-lavender（既存） */
+
+  /* disabled ボタン */
+  --color-disabled-from: #C8C8C8;
+  --color-disabled-to:   #D8D8D8;
 
   /* アニメーション */
   --animate-breathe:        breathe 3s ease-in-out infinite;
