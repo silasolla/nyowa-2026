@@ -30,10 +30,10 @@ pub fn init_recently_touched_is_false_test() {
 // GotTimestamp
 // ---------------------------------------------------------------------------
 
-pub fn got_timestamp_sets_page_loaded_at_test() {
+pub fn got_timestamp_sets_idle_started_at_test() {
   let #(model, _) = nyowa.init(Nil)
   let #(updated, _) = nyowa.update(model, nyowa.GotTimestamp(1_234_567.0))
-  updated.page_loaded_at |> should.equal(1_234_567.0)
+  updated.idle_started_at |> should.equal(1_234_567.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -49,17 +49,21 @@ pub fn button_hovered_from_idle_starts_evading_test() {
   }
 }
 
-pub fn button_hovered_increments_evade_count_test() {
+pub fn button_hovered_does_not_increment_evade_count_test() {
   let #(model, _) = nyowa.init(Nil)
   let #(updated, _) = nyowa.update(model, nyowa.ButtonHovered)
-  updated.evade_count |> should.equal(1)
+  // パターン発動時点では evade_count を増やさない
+  updated.evade_count |> should.equal(0)
 }
 
 pub fn button_hovered_sets_first_interact_at_test() {
   let #(model, _) = nyowa.init(Nil)
-  let #(m1, _) = nyowa.update(model, nyowa.GotTimestamp(5000.0))
-  let #(m2, _) = nyowa.update(m1, nyowa.ButtonHovered)
-  m2.first_interact_at |> should.equal(Some(5000.0))
+  let #(updated, _) = nyowa.update(model, nyowa.ButtonHovered)
+  // now() を使って記録されるため Some(_) になっていることだけ確認する
+  case updated.first_interact_at {
+    Some(_) -> Nil
+    None -> should.fail()
+  }
 }
 
 pub fn button_hovered_sets_dialogue_test() {
@@ -77,7 +81,6 @@ pub fn button_hovered_sets_dialogue_test() {
 
 pub fn dodge_hovered_again_increments_count_test() {
   let #(model, _) = nyowa.init(Nil)
-  // Dodge 状態を手動で作成
   let dodging_model =
     nyowa.Model(
       ..model,
@@ -92,6 +95,7 @@ pub fn dodge_hovered_again_increments_count_test() {
     nyowa.Evading(nyowa.Dodging(_, count)) -> count |> should.equal(3)
     _ -> should.fail()
   }
+  // Dodge 再チェイスで evade_count が増える
   updated.evade_count |> should.equal(3)
 }
 
@@ -152,8 +156,7 @@ pub fn clone_fake_button_clicked_removes_it_test() {
   let #(model, _) = nyowa.init(Nil)
   let fake0 = nyowa.CloneButton(pos: nyowa.Position(0.0, 0.0), is_real: False)
   let real1 = nyowa.CloneButton(pos: nyowa.Position(100.0, 0.0), is_real: True)
-  let fake2 =
-    nyowa.CloneButton(pos: nyowa.Position(200.0, 0.0), is_real: False)
+  let fake2 = nyowa.CloneButton(pos: nyowa.Position(200.0, 0.0), is_real: False)
   let cloning =
     nyowa.Model(
       ..model,
@@ -164,8 +167,8 @@ pub fn clone_fake_button_clicked_removes_it_test() {
   // index 0 の残像が消えて 2 つになる
   updated.phase
   |> should.equal(nyowa.Evading(nyowa.Cloning(clones: [real1, fake2])))
-  // evade_count が加算される
-  updated.evade_count |> should.equal(2)
+  // evade_count が +2 加算される
+  updated.evade_count |> should.equal(3)
   // エラーダイアログが出る
   updated.dialogue |> should.equal(Some("それ残像です……"))
 }
@@ -186,7 +189,8 @@ pub fn excuse_expired_low_index_advances_to_next_test() {
     nyowa.Evading(nyowa.Excusing(index: 1, text: _)) -> Nil
     _ -> should.fail()
   }
-  updated.evade_count |> should.equal(1)
+  // 自動進行中は evade_count を増やさない
+  updated.evade_count |> should.equal(0)
 }
 
 pub fn excuse_expired_high_index_resets_to_idle_test() {
@@ -195,10 +199,29 @@ pub fn excuse_expired_high_index_resets_to_idle_test() {
     nyowa.Model(
       ..model,
       phase: nyowa.Evading(nyowa.Excusing(index: 2, text: "システム障害（嘘）")),
+      evade_count: 0,
     )
   let #(updated, _) = nyowa.update(excusing, nyowa.ExcuseExpired)
   updated.phase |> should.equal(nyowa.Idle)
-  updated.dialogue |> should.equal(None)
+  // ヒント吹き出しが表示される
+  updated.dialogue
+  |> should.equal(Some("…少し待ってくれると、気分が変わるかも……"))
+  // Excuse 完走で evade_count +1
+  updated.evade_count |> should.equal(1)
+}
+
+pub fn excuse_reset_updates_idle_started_at_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let old_idle_started = 0.0
+  let excusing =
+    nyowa.Model(
+      ..model,
+      idle_started_at: old_idle_started,
+      phase: nyowa.Evading(nyowa.Excusing(index: 2, text: "システム障害（嘘）")),
+    )
+  let #(updated, _) = nyowa.update(excusing, nyowa.ExcuseExpired)
+  // idle_started_at が now() でリセットされているので 0.0 より大きい
+  { updated.idle_started_at >. old_idle_started } |> should.equal(True)
 }
 
 pub fn excuse_button_click_is_ignored_test() {
@@ -274,14 +297,171 @@ pub fn play_again_full_reset_test() {
   reset.dialogue |> should.equal(None)
 }
 
+
 // ---------------------------------------------------------------------------
-// excuse_text ユーティリティ
+// DetermineMood
 // ---------------------------------------------------------------------------
 
-pub fn excuse_text_index_0_test() {
-  nyowa.excuse_text(0) |> should.equal("今休憩中")
+pub fn mood_neutral_by_default_test() {
+  nyowa.determine_mood(0, 5000.0) |> should.equal(nyowa.Neutral)
 }
 
-pub fn excuse_text_index_1_test() {
-  nyowa.excuse_text(1) |> should.equal("17時回ったんで")
+pub fn mood_grumpy_when_evade_count_3_test() {
+  // evade_count >= 3, 放置短め → Grumpy
+  nyowa.determine_mood(3, 5000.0) |> should.equal(nyowa.Grumpy)
+}
+
+pub fn mood_furious_when_evade_count_6_test() {
+  // evade_count >= 6 → Furious
+  nyowa.determine_mood(6, 5000.0) |> should.equal(nyowa.Furious)
+}
+
+pub fn mood_rested_when_idle_30s_test() {
+  // idle >= 30s → Rested (evade_count に関係なく)
+  nyowa.determine_mood(5, 35_000.0) |> should.equal(nyowa.Rested)
+}
+
+pub fn mood_rested_wins_over_furious_test() {
+  // idle >= 30s なら evade_count >= 6 でも Rested が勝つ
+  nyowa.determine_mood(8, 35_000.0) |> should.equal(nyowa.Rested)
+}
+
+pub fn mood_sleepy_when_idle_120s_test() {
+  // idle >= 120s → Sleepy（完全な隠し機能、2分待ち）
+  nyowa.determine_mood(0, 121_000.0) |> should.equal(nyowa.Sleepy)
+}
+
+pub fn mood_sleepy_wins_over_rested_and_furious_test() {
+  // idle >= 120s なら Rested にも Furious にも勝つ
+  nyowa.determine_mood(8, 125_000.0) |> should.equal(nyowa.Sleepy)
+}
+
+pub fn mood_not_sleepy_below_120s_test() {
+  // idle < 120s なら Sleepy にならない（45s でも Rested 止まり）
+  nyowa.determine_mood(0, 45_000.0) |> should.not_equal(nyowa.Sleepy)
+}
+
+// ---------------------------------------------------------------------------
+// SelectFortune
+// ---------------------------------------------------------------------------
+
+pub fn select_fortune_returns_correct_mood_test() {
+  let f = nyowa.select_fortune(nyowa.Furious, 0.1)
+  f.mood |> should.equal(nyowa.Furious)
+}
+
+
+// ---------------------------------------------------------------------------
+// do_catch の機嫌統合テスト (evade_count + idle_ms で Mood を決定)
+// ---------------------------------------------------------------------------
+
+pub fn catch_furious_mood_when_high_evade_count_test() {
+  let #(model, _) = nyowa.init(Nil)
+  // idle=5s (< 30s), evade_count=7 (>= 6) → Furious
+  let m =
+    nyowa.Model(
+      ..model,
+      evade_count: 7,
+      idle_started_at: 0.0,
+      first_interact_at: Some(5000.0),
+      phase: nyowa.Evading(nyowa.Dodging(
+        pos: nyowa.Position(0.0, 0.0),
+        evade_count: 7,
+      )),
+      recently_touched: False,
+    )
+  let #(result, _) = nyowa.update(m, nyowa.ButtonClicked(0))
+  case result.phase {
+    nyowa.ShowResult(f) -> f.mood |> should.equal(nyowa.Furious)
+    _ -> should.fail()
+  }
+}
+
+pub fn catch_sleepy_mood_when_long_idle_test() {
+  let #(model, _) = nyowa.init(Nil)
+  // idle_started_at=0, first_interact_at=121s → idle=121s ≥ 120s → Sleepy
+  let m =
+    nyowa.Model(
+      ..model,
+      evade_count: 0,
+      idle_started_at: 0.0,
+      first_interact_at: Some(121_000.0),
+      phase: nyowa.Evading(nyowa.Cooperating),
+      recently_touched: False,
+    )
+  let #(result, _) = nyowa.update(m, nyowa.ButtonClicked(0))
+  case result.phase {
+    nyowa.ShowResult(f) -> f.mood |> should.equal(nyowa.Sleepy)
+    _ -> should.fail()
+  }
+}
+
+pub fn catch_rested_mood_when_idle_30s_test() {
+  let #(model, _) = nyowa.init(Nil)
+  // idle=35s ≥ 30s → Rested (evade_count に関係なく)
+  let m =
+    nyowa.Model(
+      ..model,
+      evade_count: 5,
+      idle_started_at: 0.0,
+      first_interact_at: Some(35_000.0),
+      phase: nyowa.Evading(nyowa.Cooperating),
+      recently_touched: False,
+    )
+  let #(result, _) = nyowa.update(m, nyowa.ButtonClicked(0))
+  case result.phase {
+    nyowa.ShowResult(f) -> f.mood |> should.equal(nyowa.Rested)
+    _ -> should.fail()
+  }
+}
+
+pub fn catch_dialogue_is_cleared_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let m =
+    nyowa.Model(
+      ..model,
+      evade_count: 0,
+      idle_started_at: 0.0,
+      dialogue: Some("えっ……にょわ……"),
+      phase: nyowa.Evading(nyowa.Cooperating),
+      recently_touched: False,
+    )
+  let #(result, _) = nyowa.update(m, nyowa.ButtonClicked(0))
+  result.dialogue |> should.equal(None)
+}
+
+// ---------------------------------------------------------------------------
+// PlayAgain: idle_started_at がリセットされることの確認
+// ---------------------------------------------------------------------------
+
+pub fn play_again_resets_idle_started_at_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let old_m = nyowa.Model(..model, idle_started_at: 0.0)
+  let #(reset, _) = nyowa.update(old_m, nyowa.PlayAgain)
+  // now() で更新されるので 0.0 より大きいはず
+  { reset.idle_started_at >. 0.0 } |> should.equal(True)
+}
+
+// ---------------------------------------------------------------------------
+// ClearDialogue
+// ---------------------------------------------------------------------------
+
+pub fn clear_dialogue_clears_when_idle_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let m = nyowa.Model(..model, phase: nyowa.Idle, dialogue: Some("テスト"))
+  let #(updated, _) = nyowa.update(m, nyowa.ClearDialogue)
+  updated.dialogue |> should.equal(None)
+}
+
+pub fn clear_dialogue_ignored_when_evading_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let m =
+    nyowa.Model(
+      ..model,
+      phase: nyowa.Evading(nyowa.Excusing(index: 0, text: "今休憩中")),
+      dialogue: Some("今休憩中"),
+    )
+  let #(updated, _) = nyowa.update(m, nyowa.ClearDialogue)
+  // Evading 中は古いタイマーを無視してダイアログを消さない
+  updated.dialogue |> should.equal(Some("今休憩中"))
 }

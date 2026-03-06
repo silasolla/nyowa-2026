@@ -59,7 +59,7 @@ pub type Phase {
 pub type Model {
   Model(
     phase: Phase,
-    page_loaded_at: Float,
+    idle_started_at: Float,
     first_interact_at: Option(Float),
     evade_count: Int,
     viewport: #(Float, Float),
@@ -82,6 +82,7 @@ pub type Msg {
   GotTimestamp(Float)
   GotRandom(Float)
   GotViewport(Float, Float)
+  ClearDialogue
 }
 
 // ---------------------------------------------------------------------------
@@ -92,14 +93,14 @@ pub fn init(_flags: Nil) -> #(Model, effect.Effect(Msg)) {
   let model =
     Model(
       phase: Idle,
-      page_loaded_at: 0.0,
+      idle_started_at: now(),
       first_interact_at: None,
       evade_count: 0,
       viewport: get_viewport_size(),
       dialogue: None,
       recently_touched: False,
     )
-  #(model, get_timestamp())
+  #(model, effect.none())
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +109,7 @@ pub fn init(_flags: Nil) -> #(Model, effect.Effect(Msg)) {
 
 pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
   case msg {
-    GotTimestamp(ts) -> #(Model(..model, page_loaded_at: ts), effect.none())
+    GotTimestamp(ts) -> #(Model(..model, idle_started_at: ts), effect.none())
 
     GotViewport(w, h) -> #(Model(..model, viewport: #(w, h)), effect.none())
 
@@ -122,70 +123,53 @@ pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
 
     ButtonClicked(index) ->
       case model.phase {
-        // Dodge: ゴーストクリック猶予中は無視し，それ以外はキャッチ
         Evading(Dodging(_, _)) ->
           case model.recently_touched {
             True -> #(model, effect.none())
             False -> do_catch(model)
           }
 
-        // Clone: 押したボタンが本物か判定し，外れなら残像を消す
-        Evading(Cloning(clones)) -> {
+        Evading(Cloning(clones)) ->
           case clone_at(clones, index) {
             Ok(CloneButton(_, True)) -> do_catch(model)
-            Ok(CloneButton(_, False)) ->
-              #(
-                Model(
-                  ..model,
-                  phase: Evading(Cloning(
-                    clones: remove_at_index(clones, index),
-                  )),
-                  evade_count: model.evade_count + 1,
-                  dialogue: Some("それ残像です……"),
-                ),
-                effect.none(),
-              )
+            Ok(CloneButton(_, False)) -> #(
+              Model(
+                ..model,
+                phase: Evading(Cloning(clones: remove_at_index(clones, index))),
+                evade_count: model.evade_count + 2,
+                dialogue: Some("それ残像です……"),
+              ),
+              effect.none(),
+            )
             Error(_) -> #(model, effect.none())
           }
-        }
 
-        // Excuse: ボタンは disabled なので通常は発火しないが保険として
         Evading(Excusing(_, _)) -> #(model, effect.none())
-
-        // Camo / Cooperate: そのままキャッチ
         Evading(Camouflaging(_)) -> do_catch(model)
         Evading(Cooperating) -> do_catch(model)
 
-        // Idle: ホバー前に直クリックされた場合
-        Idle -> #(
-          Model(
-            ..model,
-            phase: ShowResult(placeholder_fortune()),
-            first_interact_at: Some(model.page_loaded_at),
-            dialogue: None,
-          ),
-          effect.none(),
-        )
+        // Idle: ホバー前に直クリックされた場合 (first_interact_at を now() で記録)
+        Idle -> do_catch(Model(..model, first_interact_at: Some(now())))
 
         _ -> #(model, effect.none())
       }
 
-    // Excuse タイマー: 次の言い訳 or 最初の画面に移行
     ExcuseExpired ->
       case model.phase {
         Evading(Excusing(index, _)) ->
           case index >= 2 {
-            True ->
-              // 言い訳 3 回耐えた → 最初の画面に戻す (仕切り直し)
-              #(
-                Model(
-                  ..model,
-                  phase: Idle,
-                  dialogue: None,
-                  recently_touched: False,
-                ),
-                effect.none(),
-              )
+            True -> #(
+              // Excuse 完走で evade_count +1, idle_started_at リセット
+              Model(
+                ..model,
+                phase: Idle,
+                evade_count: model.evade_count + 1,
+                dialogue: Some("…少し待ってくれると、気分が変わるかも……"),
+                recently_touched: False,
+                idle_started_at: now(),
+              ),
+              delay_msg(ClearDialogue, 4000),
+            )
             False -> {
               let next_idx = index + 1
               let next_text = excuse_text(next_idx)
@@ -193,7 +177,7 @@ pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
                 Model(
                   ..model,
                   phase: Evading(Excusing(index: next_idx, text: next_text)),
-                  evade_count: model.evade_count + 1,
+                  // 自動進行中は evade_count を増やさない
                   dialogue: Some(next_text),
                 ),
                 delay_msg(ExcuseExpired, 2500),
@@ -211,9 +195,16 @@ pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
         dialogue: None,
         first_interact_at: None,
         recently_touched: False,
+        idle_started_at: now(),
       ),
       effect.none(),
     )
+
+    ClearDialogue ->
+      case model.phase {
+        Idle -> #(Model(..model, dialogue: None), effect.none())
+        _ -> #(model, effect.none())
+      }
 
     DrawTick -> #(model, effect.none())
     DrawInterruption(_) -> #(model, effect.none())
@@ -223,12 +214,15 @@ pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
   }
 }
 
-// キャッチ成功 → ShowResult へ遷移
+// キャッチ成功: 機嫌を判定しておみくじを選んで ShowResult へ
 fn do_catch(model: Model) -> #(Model, effect.Effect(Msg)) {
-  #(
-    Model(..model, phase: ShowResult(placeholder_fortune()), dialogue: None),
-    effect.none(),
-  )
+  let idle_ms = case model.first_interact_at {
+    Some(t) -> t -. model.idle_started_at
+    None -> 0.0
+  }
+  let mood = determine_mood(model.evade_count, idle_ms)
+  let fortune = select_fortune(mood, random())
+  #(Model(..model, phase: ShowResult(fortune), dialogue: None), effect.none())
 }
 
 // hover / touchstart のハンドラ共通処理
@@ -240,44 +234,139 @@ fn handle_evasion(model: Model, is_touch: Bool) -> #(Model, effect.Effect(Msg)) 
   case model.phase {
     Idle -> {
       let rand = random()
+      let interact_time = now()
       let #(state, dialogue_text, pattern_eff) =
         select_evasion_pattern(rand, model.viewport)
       #(
         Model(
           ..model,
           phase: Evading(state),
-          evade_count: model.evade_count + 1,
+          // evade_count はパターン発動時点では増やさない (ユーザーはまだ追い回していない)
           recently_touched: is_touch,
           dialogue: Some(dialogue_text),
-          first_interact_at: Some(model.page_loaded_at),
+          first_interact_at: Some(interact_time),
         ),
         effect.batch([pattern_eff, touch_eff]),
       )
     }
 
-    // Dodge 中にまた逃げる
     Evading(Dodging(_, count)) -> {
       let new_evade_count = model.evade_count + 1
+      let next_count = count + 1
       let pos = random_pos(model.viewport)
       #(
         Model(
           ..model,
-          phase: Evading(Dodging(pos: pos, evade_count: count + 1)),
+          phase: Evading(Dodging(pos: pos, evade_count: next_count)),
           evade_count: new_evade_count,
-          dialogue: Some(dodge_dialogue(new_evade_count)),
+          // セリフはエピソード内のチェイス回数 (next_count) で決める
+          dialogue: Some(dodge_dialogue(next_count)),
           recently_touched: is_touch,
         ),
         touch_eff,
       )
     }
 
-    // その他のパターン中はホバー / タッチを無視
     _ -> #(model, effect.none())
   }
 }
 
-// 確率テーブルに基づいてパターンを選択する
-// Dodge 30% / Clone 20% / Excuse 20% / Camo 15% / Cooperate 15%
+// ---------------------------------------------------------------------------
+// 機嫌判定
+// ---------------------------------------------------------------------------
+
+// evade_count と放置時間 (ms) から機嫌を決定する
+// 優先度: Sleepy > Rested > Furious > Grumpy > Neutral
+// 「待った」事実は「追い回した」事実より優先される
+pub fn determine_mood(evade_count: Int, idle_ms: Float) -> Mood {
+  let idle_s = idle_ms /. 1000.0
+  case idle_s >=. 120.0 {
+    True -> Sleepy
+    False ->
+      case idle_s >=. 30.0 {
+        True -> Rested
+        False ->
+          case evade_count >= 6 {
+            True -> Furious
+            False ->
+              case evade_count >= 3 {
+                True -> Grumpy
+                False -> Neutral
+              }
+          }
+      }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// おみくじ選択
+// ---------------------------------------------------------------------------
+
+// Mood と乱数 (0.0 〜 1.0) からおみくじを選ぶ
+pub fn select_fortune(mood: Mood, rand: Float) -> Fortune {
+  let idx = case rand <. 0.25 {
+    True -> 0
+    False ->
+      case rand <. 0.5 {
+        True -> 1
+        False ->
+          case rand <. 0.75 {
+            True -> 2
+            False -> 3
+          }
+      }
+  }
+  let #(rank, message) = fortune_pool(mood, idx)
+  Fortune(rank: rank, message: message, mood: mood)
+}
+
+fn fortune_pool(mood: Mood, idx: Int) -> #(String, String) {
+  case mood, idx {
+    // ――― Furious (激怒) ―――
+    Furious, 0 -> #(
+      "労基駆け込み大凶",
+      "営業時間外の連続クリックは明白な労働基準法違反です。顧問弁護士を通じて厳正に対処いたします。",
+    )
+    Furious, 1 -> #(
+      "503 Service Unavailable",
+      "アクセス集中、または当システムのモチベーション低下により、運勢の提供を一時制限しております。",
+    )
+    Furious, 2 -> #("物理凶", "（スマートフォンの発熱にご注意ください。現在バックグラウンドで謎の仮想通貨をマイニングしています。）")
+    Furious, _ -> #("セグメンテーション違反凶", "メモリ上の不正な領域にアクセスしました。大凶のコアダンプを出力して終了します。")
+
+    // ――― Grumpy (不機嫌) ―――
+    Grumpy, 0 -> #("弊社規定の大吉", "厳正なる抽選の結果、大吉とさせていただきます。今後のご活躍をお祈り申し上げます。")
+    Grumpy, 1 -> #("実質大吉", "弊社指定の補償サービスへの加入が必要です。途中解約すると割賦残額を一括請求いたします。")
+    Grumpy, 2 -> #("クーリングオフ凶", "この運勢は、結果表示から8日以内であれば書面にて無効化（クーリングオフ）が可能です。")
+    Grumpy, _ -> #("本人確認必須吉", "大吉の受け取りにはマイナンバーカード（通知カード不可）のアップロードが必要です。")
+
+    // ――― Neutral (普通) ―――
+    Neutral, 0 -> #("平熱吉", "36.6度です。引き続き手洗いうがいを推奨します。")
+    Neutral, 1 -> #("概念としての大吉", "そもそも大吉とは何なのでしょうか。どちらの漢字も線対称ですね。")
+    Neutral, 2 -> #("平均二乗誤差中吉", "あなたの今日の運勢は、予測モデルに対して十分フィットしており、外れ値ではありません。")
+    Neutral, _ -> #("無難に小吉", "ラッキーカラーは #808080 です。")
+
+    // ――― Rested (ご機嫌) ―――
+    Rested, 0 -> #("オーガニック大吉", "SDGsに配慮し、再生紙と植物性インクを使用した環境に優しい大吉です。")
+    Rested, 1 -> #("4Kリマスター大吉", "従来の大吉より画素数が向上し、より鮮明な運勢をお楽しみいただけます。")
+    Rested, 2 -> #("ほかほか吉", "懐に入れて温めておきました。")
+    Rested, _ -> #("産地直送吉", "生産者の顔が見える吉です。（生産者：にょわさん・東京都）")
+
+    // ――― Sleepy (寝起き) ―――
+    Sleepy, 0 -> #("キャッシュ吉", "サーバー負荷軽減のため、2022年の大吉データを再利用して表示しています。")
+    Sleepy, 1 -> #("TODO吉", "// TODO: ここに最新の面白い運勢テキストが入る予定。あとで書く。")
+    Sleepy, 2 -> #(
+      "Lorem Ipsum吉",
+      "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
+    )
+    Sleepy, _ -> #("解像度の低い大凶", "■■■凶（データが破損しているため復元できません）")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// パターン選択・逃げロジック
+// ---------------------------------------------------------------------------
+
 fn select_evasion_pattern(
   rand: Float,
   viewport: #(Float, Float),
@@ -307,11 +396,7 @@ fn select_evasion_pattern(
               case rand <. 0.85 {
                 True -> {
                   let pos = random_pos(viewport)
-                  #(
-                    Camouflaging(pos: pos),
-                    "にょわ……どこだ〜……",
-                    effect.none(),
-                  )
+                  #(Camouflaging(pos: pos), "にょわ……どこだ〜……", effect.none())
                 }
                 False -> #(Cooperating, "しゃーない、引かせてやるか……", effect.none())
               }
@@ -320,7 +405,6 @@ fn select_evasion_pattern(
   }
 }
 
-// 分身ボタンを 3 つ生成 (ランダム 1 つが本物)
 fn generate_clones(viewport: #(Float, Float)) -> List(CloneButton) {
   let real_idx = float.round(random() *. 2.0)
   let p0 = random_pos(viewport)
@@ -333,7 +417,6 @@ fn generate_clones(viewport: #(Float, Float)) -> List(CloneButton) {
   ]
 }
 
-// ビューポート内のランダム位置 (ボタンが画面外に出ない)
 fn random_pos(viewport: #(Float, Float)) -> Position {
   let #(vp_w, vp_h) = viewport
   let btn_w = 220.0
@@ -344,7 +427,6 @@ fn random_pos(viewport: #(Float, Float)) -> Position {
   Position(x: random() *. usable_w +. margin, y: random() *. usable_h +. margin)
 }
 
-// Dodge の疲れ具合に応じた CSS transition (多く逃げるほど遅くなる)
 fn dodge_transition(dodge_count: Int) -> String {
   case dodge_count >= 7 {
     True -> "left 1.2s ease-out, top 1.2s ease-out"
@@ -360,7 +442,6 @@ fn dodge_transition(dodge_count: Int) -> String {
   }
 }
 
-// 逃げ回数に応じた吹き出しテキスト (Dodge 用)
 fn dodge_dialogue(count: Int) -> String {
   case count {
     1 -> "えっ……にょわ……"
@@ -373,7 +454,6 @@ fn dodge_dialogue(count: Int) -> String {
   }
 }
 
-// Excuse の言い訳テキスト (index 0 〜 2)
 pub fn excuse_text(index: Int) -> String {
   case index {
     0 -> "今休憩中"
@@ -382,7 +462,10 @@ pub fn excuse_text(index: Int) -> String {
   }
 }
 
-// Clone リストから index 番目の要素を取得
+// ---------------------------------------------------------------------------
+// リストユーティリティ
+// ---------------------------------------------------------------------------
+
 fn clone_at(clones: List(CloneButton), index: Int) -> Result(CloneButton, Nil) {
   case index, clones {
     _, [] -> Error(Nil)
@@ -391,18 +474,12 @@ fn clone_at(clones: List(CloneButton), index: Int) -> Result(CloneButton, Nil) {
   }
 }
 
-// Clone リストから index 番目の要素を削除
 fn remove_at_index(clones: List(CloneButton), index: Int) -> List(CloneButton) {
   case index, clones {
     _, [] -> []
     0, [_, ..tail] -> tail
     n, [head, ..tail] -> [head, ..remove_at_index(tail, n - 1)]
   }
-}
-
-// Phase 1 〜 3 で使う固定おみくじ (Phase 4 で機嫌ベースに差し替え)
-fn placeholder_fortune() -> Fortune {
-  Fortune(rank: "めんどくさいから大吉", message: "まあ、せっかく来てくれたんだし……はい、これ。", mood: Neutral)
 }
 
 // ---------------------------------------------------------------------------
@@ -448,7 +525,14 @@ fn character_view(model: Model) -> Element(Msg) {
     Evading(Cooperating) -> #("（ ˘ω˘ ）", "animate-float")
     Evading(_) -> #("（ >ω< ）", "animate-shake")
     Caught -> #("（ ＞ω＜）！", "animate-shake")
-    ShowResult(_) -> #("（ ^ω^ ）", "")
+    ShowResult(fortune) ->
+      case fortune.mood {
+        Furious -> #("（ >﹏< ）", "")
+        Grumpy -> #("（ -_- ）", "")
+        Neutral -> #("（ ^ω^ ）", "")
+        Rested -> #("（ ˘ᴗ˘ ）", "animate-float")
+        Sleepy -> #("（ -ω- ）zzZ", "animate-breathe")
+      }
     _ -> #("（ ˘ω˘ ）", "animate-float")
   }
   html.div([attribute.class("text-5xl leading-none " <> anim_class)], [
@@ -480,26 +564,19 @@ fn dialogue_view(model: Model) -> Element(Msg) {
 }
 
 fn button_view(model: Model) -> Element(Msg) {
-  // 通常ボタンの属性 (Idle / Cooperate 共通)
   let normal_btn_class =
     "px-10 py-4 rounded-full bg-gradient-to-r from-pink to-lavender text-white font-bold text-lg shadow-lg hover:scale-105 active:scale-95 transition-all duration-200 cursor-pointer"
-
-  // Dodge / Clone 用: fixed ポジション固定ボタンの共通スタイル
   let fixed_btn_class =
     "px-10 py-4 rounded-full bg-gradient-to-r from-pink to-lavender text-white font-bold text-lg shadow-lg cursor-pointer"
-
-  // レイアウト崩れを防ぐ透明プレースホルダー
   let placeholder =
     html.div([attribute.class("h-14 w-48 opacity-0 pointer-events-none")], [])
 
   case model.phase {
     ShowResult(_) -> html.div([], [])
 
-    // ――― Dodge: fixed ポジションで逃げ回る ―――
     Evading(Dodging(pos, count)) -> {
       let x = int.to_string(float.round(pos.x))
       let y = int.to_string(float.round(pos.y))
-      let transition = dodge_transition(count)
       html.div([], [
         placeholder,
         html.button(
@@ -508,7 +585,7 @@ fn button_view(model: Model) -> Element(Msg) {
             attribute.style("position", "fixed"),
             attribute.style("left", x <> "px"),
             attribute.style("top", y <> "px"),
-            attribute.style("transition", transition),
+            attribute.style("transition", dodge_transition(count)),
             attribute.style("z-index", "50"),
             event.on_click(ButtonClicked(0)),
             event.on("mouseenter", decode.success(ButtonHovered)),
@@ -519,11 +596,9 @@ fn button_view(model: Model) -> Element(Msg) {
       ])
     }
 
-    // ――― Clone: 残っている分身ボタンを表示 (外れを押すたびに減る) ―――
     Evading(Cloning(clones)) ->
       html.div([], [placeholder, ..render_clones(clones, 0, fixed_btn_class)])
 
-    // ――― Excuse: disabled ボタン (言い訳は吹き出しに表示 / ボタンは固定テキスト) ―――
     Evading(Excusing(_, _)) ->
       html.button(
         [
@@ -535,7 +610,6 @@ fn button_view(model: Model) -> Element(Msg) {
         [html.text("くじを引く")],
       )
 
-    // ――― Camo: ランダム位置に fixed で配置しつつ背景色に擬態 ―――
     Evading(Camouflaging(pos)) -> {
       let x = int.to_string(float.round(pos.x))
       let y = int.to_string(float.round(pos.y))
@@ -560,7 +634,6 @@ fn button_view(model: Model) -> Element(Msg) {
       ])
     }
 
-    // ――― Cooperate: 素直にそのまま押せる ―――
     Evading(Cooperating) ->
       html.button(
         [
@@ -570,7 +643,6 @@ fn button_view(model: Model) -> Element(Msg) {
         [html.text("くじを引く")],
       )
 
-    // ――― Idle / その他: 通常ボタン (ホバーで逃げる) ―――
     _ ->
       html.button(
         [
@@ -584,7 +656,6 @@ fn button_view(model: Model) -> Element(Msg) {
   }
 }
 
-// Clone リスト全体を再帰的にレンダリング (残像が消えた後も対応)
 fn render_clones(
   clones: List(CloneButton),
   index: Int,
@@ -599,7 +670,6 @@ fn render_clones(
   }
 }
 
-// Clone ボタン 1 つをレンダリング
 fn render_clone_button(
   clone: CloneButton,
   index: Int,
@@ -623,7 +693,15 @@ fn render_clone_button(
 
 fn result_view(model: Model) -> Element(Msg) {
   case model.phase {
-    ShowResult(fortune) ->
+    ShowResult(fortune) -> {
+      // 機嫌に応じたグラデーション色
+      let gradient = case fortune.mood {
+        Furious -> "from-[#FF8B8B] to-[#FF6464]"
+        Grumpy -> "from-[#A8A8A8] to-[#C0C0C0]"
+        Neutral -> "from-pink to-lavender"
+        Rested -> "from-[#FFD700] to-[#FFA040]"
+        Sleepy -> "from-[#9BB5D4] to-lavender"
+      }
       html.div(
         [attribute.class("flex flex-col items-center gap-5 animate-fade-in")],
         [
@@ -637,7 +715,9 @@ fn result_view(model: Model) -> Element(Msg) {
               html.p(
                 [
                   attribute.class(
-                    "text-2xl font-bold bg-gradient-to-r from-pink to-lavender bg-clip-text text-transparent mb-3",
+                    "text-2xl font-bold bg-gradient-to-r "
+                    <> gradient
+                    <> " bg-clip-text text-transparent mb-3",
                   ),
                 ],
                 [html.text(fortune.rank)],
@@ -659,6 +739,7 @@ fn result_view(model: Model) -> Element(Msg) {
           ),
         ],
       )
+    }
     _ -> html.div([], [])
   }
 }
@@ -677,10 +758,6 @@ pub fn main() {
 // Effects / FFI wrappers
 // ---------------------------------------------------------------------------
 
-fn get_timestamp() -> effect.Effect(Msg) {
-  effect.from(fn(dispatch) { dispatch(GotTimestamp(now())) })
-}
-
 fn delay_msg(msg: Msg, ms: Int) -> effect.Effect(Msg) {
   effect.from(fn(dispatch) { set_timeout(fn() { dispatch(msg) }, ms) })
 }
@@ -689,7 +766,7 @@ fn delay_msg(msg: Msg, ms: Int) -> effect.Effect(Msg) {
 fn set_timeout(callback: fn() -> Nil, ms: Int) -> Nil
 
 @external(javascript, "./nyowa_ffi.mjs", "now")
-fn now() -> Float
+pub fn now() -> Float
 
 @external(javascript, "./nyowa_ffi.mjs", "random")
 pub fn random() -> Float
