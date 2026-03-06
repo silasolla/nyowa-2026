@@ -44,7 +44,7 @@ pub type EvasionState {
   Dodging(pos: Position, evade_count: Int)
   Cloning(clones: List(CloneButton))
   Excusing(index: Int, text: String)
-  Camouflaging
+  Camouflaging(pos: Position)
   Cooperating
 }
 
@@ -112,10 +112,7 @@ pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
 
     GotViewport(w, h) -> #(Model(..model, viewport: #(w, h)), effect.none())
 
-    // PC: マウスホバー → Dodge 発動
     ButtonHovered -> handle_evasion(model, False)
-
-    // モバイル: タッチ開始 → Dodge 発動 + ゴーストクリック防止タイマー起動
     ButtonTouched -> handle_evasion(model, True)
 
     GhostClickExpired -> #(
@@ -123,34 +120,86 @@ pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
       effect.none(),
     )
 
-    ButtonClicked(_index) ->
+    ButtonClicked(index) ->
       case model.phase {
-        // 逃げている最中かつゴーストクリック猶予中は無視
+        // Dodge: ゴーストクリック猶予中は無視し，それ以外はキャッチ
         Evading(Dodging(_, _)) ->
           case model.recently_touched {
             True -> #(model, effect.none())
-            False ->
-              // ボタンを捕まえた
+            False -> do_catch(model)
+          }
+
+        // Clone: 押したボタンが本物か判定し，外れなら残像を消す
+        Evading(Cloning(clones)) -> {
+          case clone_at(clones, index) {
+            Ok(CloneButton(_, True)) -> do_catch(model)
+            Ok(CloneButton(_, False)) ->
               #(
                 Model(
                   ..model,
-                  phase: ShowResult(placeholder_fortune()),
-                  first_interact_at: Some(model.page_loaded_at),
+                  phase: Evading(Cloning(
+                    clones: remove_at_index(clones, index),
+                  )),
+                  evade_count: model.evade_count + 1,
+                  dialogue: Some("それ残像です……"),
                 ),
                 effect.none(),
               )
+            Error(_) -> #(model, effect.none())
           }
-        // Phase 3 以降で実装する他の逃げパターン中はまだ無視
-        Evading(_) -> #(model, effect.none())
-        // Idle 時はホバー前に直クリックされた場合 (レア)
+        }
+
+        // Excuse: ボタンは disabled なので通常は発火しないが保険として
+        Evading(Excusing(_, _)) -> #(model, effect.none())
+
+        // Camo / Cooperate: そのままキャッチ
+        Evading(Camouflaging(_)) -> do_catch(model)
+        Evading(Cooperating) -> do_catch(model)
+
+        // Idle: ホバー前に直クリックされた場合
         Idle -> #(
           Model(
             ..model,
             phase: ShowResult(placeholder_fortune()),
             first_interact_at: Some(model.page_loaded_at),
+            dialogue: None,
           ),
           effect.none(),
         )
+
+        _ -> #(model, effect.none())
+      }
+
+    // Excuse タイマー: 次の言い訳 or 最初の画面に移行
+    ExcuseExpired ->
+      case model.phase {
+        Evading(Excusing(index, _)) ->
+          case index >= 2 {
+            True ->
+              // 言い訳 3 回耐えた → 最初の画面に戻す (仕切り直し)
+              #(
+                Model(
+                  ..model,
+                  phase: Idle,
+                  dialogue: None,
+                  recently_touched: False,
+                ),
+                effect.none(),
+              )
+            False -> {
+              let next_idx = index + 1
+              let next_text = excuse_text(next_idx)
+              #(
+                Model(
+                  ..model,
+                  phase: Evading(Excusing(index: next_idx, text: next_text)),
+                  evade_count: model.evade_count + 1,
+                  dialogue: Some(next_text),
+                ),
+                delay_msg(ExcuseExpired, 2500),
+              )
+            }
+          }
         _ -> #(model, effect.none())
       }
 
@@ -166,8 +215,6 @@ pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
       effect.none(),
     )
 
-    // Phase 3 以降で実装するメッセージ
-    ExcuseExpired -> #(model, effect.none())
     DrawTick -> #(model, effect.none())
     DrawInterruption(_) -> #(model, effect.none())
     DrawComplete(_) -> #(model, effect.none())
@@ -176,37 +223,117 @@ pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
   }
 }
 
-// Dodge 共通ロジック (PC ホバー・モバイルタッチ共用)
+// キャッチ成功 → ShowResult へ遷移
+fn do_catch(model: Model) -> #(Model, effect.Effect(Msg)) {
+  #(
+    Model(..model, phase: ShowResult(placeholder_fortune()), dialogue: None),
+    effect.none(),
+  )
+}
+
+// hover / touchstart のハンドラ共通処理
 fn handle_evasion(model: Model, is_touch: Bool) -> #(Model, effect.Effect(Msg)) {
+  let touch_eff = case is_touch {
+    True -> delay_msg(GhostClickExpired, 500)
+    False -> effect.none()
+  }
   case model.phase {
-    Idle | Evading(Dodging(_, _)) -> {
-      let new_evade_count = model.evade_count + 1
-      let new_dodge_count = case model.phase {
-        Evading(Dodging(_, c)) -> c + 1
-        _ -> 1
-      }
-      let pos = random_pos(model.viewport)
-      let new_phase = Evading(Dodging(pos: pos, evade_count: new_dodge_count))
-      let eff = case is_touch {
-        True -> delay_msg(GhostClickExpired, 500)
-        False -> effect.none()
-      }
+    Idle -> {
+      let rand = random()
+      let #(state, dialogue_text, pattern_eff) =
+        select_evasion_pattern(rand, model.viewport)
       #(
         Model(
           ..model,
-          phase: new_phase,
+          phase: Evading(state),
+          evade_count: model.evade_count + 1,
+          recently_touched: is_touch,
+          dialogue: Some(dialogue_text),
+          first_interact_at: Some(model.page_loaded_at),
+        ),
+        effect.batch([pattern_eff, touch_eff]),
+      )
+    }
+
+    // Dodge 中にまた逃げる
+    Evading(Dodging(_, count)) -> {
+      let new_evade_count = model.evade_count + 1
+      let pos = random_pos(model.viewport)
+      #(
+        Model(
+          ..model,
+          phase: Evading(Dodging(pos: pos, evade_count: count + 1)),
           evade_count: new_evade_count,
           dialogue: Some(dodge_dialogue(new_evade_count)),
           recently_touched: is_touch,
         ),
-        eff,
+        touch_eff,
       )
     }
+
+    // その他のパターン中はホバー / タッチを無視
     _ -> #(model, effect.none())
   }
 }
 
-// ランダム位置を生成 (ビューポート内に収める)
+// 確率テーブルに基づいてパターンを選択する
+// Dodge 30% / Clone 20% / Excuse 20% / Camo 15% / Cooperate 15%
+fn select_evasion_pattern(
+  rand: Float,
+  viewport: #(Float, Float),
+) -> #(EvasionState, String, effect.Effect(Msg)) {
+  case rand <. 0.3 {
+    True -> {
+      let pos = random_pos(viewport)
+      #(Dodging(pos: pos, evade_count: 1), "えっ……にょわ……", effect.none())
+    }
+    False ->
+      case rand <. 0.5 {
+        True -> {
+          let clones = generate_clones(viewport)
+          #(Cloning(clones: clones), "どれが本物でしょ〜にょわ……", effect.none())
+        }
+        False ->
+          case rand <. 0.7 {
+            True -> {
+              let text = excuse_text(0)
+              #(
+                Excusing(index: 0, text: text),
+                text,
+                delay_msg(ExcuseExpired, 2500),
+              )
+            }
+            False ->
+              case rand <. 0.85 {
+                True -> {
+                  let pos = random_pos(viewport)
+                  #(
+                    Camouflaging(pos: pos),
+                    "にょわ……どこだ〜……",
+                    effect.none(),
+                  )
+                }
+                False -> #(Cooperating, "しゃーない、引かせてやるか……", effect.none())
+              }
+          }
+      }
+  }
+}
+
+// 分身ボタンを 3 つ生成 (ランダム 1 つが本物)
+fn generate_clones(viewport: #(Float, Float)) -> List(CloneButton) {
+  let real_idx = float.round(random() *. 2.0)
+  let p0 = random_pos(viewport)
+  let p1 = random_pos(viewport)
+  let p2 = random_pos(viewport)
+  [
+    CloneButton(pos: p0, is_real: real_idx == 0),
+    CloneButton(pos: p1, is_real: real_idx == 1),
+    CloneButton(pos: p2, is_real: real_idx == 2),
+  ]
+}
+
+// ビューポート内のランダム位置 (ボタンが画面外に出ない)
 fn random_pos(viewport: #(Float, Float)) -> Position {
   let #(vp_w, vp_h) = viewport
   let btn_w = 220.0
@@ -217,7 +344,23 @@ fn random_pos(viewport: #(Float, Float)) -> Position {
   Position(x: random() *. usable_w +. margin, y: random() *. usable_h +. margin)
 }
 
-// 逃げ回数に応じた吹き出しテキスト
+// Dodge の疲れ具合に応じた CSS transition (多く逃げるほど遅くなる)
+fn dodge_transition(dodge_count: Int) -> String {
+  case dodge_count >= 7 {
+    True -> "left 1.2s ease-out, top 1.2s ease-out"
+    False ->
+      case dodge_count >= 5 {
+        True -> "left 0.7s ease-out, top 0.7s ease-out"
+        False ->
+          case dodge_count >= 3 {
+            True -> "left 0.45s ease-out, top 0.45s ease-out"
+            False -> "left 0.25s ease-out, top 0.25s ease-out"
+          }
+      }
+  }
+}
+
+// 逃げ回数に応じた吹き出しテキスト (Dodge 用)
 fn dodge_dialogue(count: Int) -> String {
   case count {
     1 -> "えっ……にょわ……"
@@ -225,7 +368,35 @@ fn dodge_dialogue(count: Int) -> String {
     3 -> "まだ仕事中なんで……"
     4 -> "もうちょっとだけ……"
     5 -> "にょわにょわ……！"
+    6 -> "つかれてきた……にょわ……"
     _ -> "も、もう限界……にょわ……"
+  }
+}
+
+// Excuse の言い訳テキスト (index 0 〜 2)
+pub fn excuse_text(index: Int) -> String {
+  case index {
+    0 -> "今休憩中"
+    1 -> "17時回ったんで"
+    _ -> "システム障害（嘘）"
+  }
+}
+
+// Clone リストから index 番目の要素を取得
+fn clone_at(clones: List(CloneButton), index: Int) -> Result(CloneButton, Nil) {
+  case index, clones {
+    _, [] -> Error(Nil)
+    0, [head, ..] -> Ok(head)
+    n, [_, ..tail] -> clone_at(tail, n - 1)
+  }
+}
+
+// Clone リストから index 番目の要素を削除
+fn remove_at_index(clones: List(CloneButton), index: Int) -> List(CloneButton) {
+  case index, clones {
+    _, [] -> []
+    0, [_, ..tail] -> tail
+    n, [head, ..tail] -> [head, ..remove_at_index(tail, n - 1)]
   }
 }
 
@@ -274,6 +445,7 @@ fn header_view() -> Element(Msg) {
 fn character_view(model: Model) -> Element(Msg) {
   let #(char_text, anim_class) = case model.phase {
     Idle -> #("（ ˘ω˘ ）", "animate-float")
+    Evading(Cooperating) -> #("（ ˘ω˘ ）", "animate-float")
     Evading(_) -> #("（ >ω< ）", "animate-shake")
     Caught -> #("（ ＞ω＜）！", "animate-shake")
     ShowResult(_) -> #("（ ^ω^ ）", "")
@@ -308,53 +480,145 @@ fn dialogue_view(model: Model) -> Element(Msg) {
 }
 
 fn button_view(model: Model) -> Element(Msg) {
-  let common_attrs = [
-    event.on_click(ButtonClicked(0)),
-    event.on("mouseenter", decode.success(ButtonHovered)),
-    event.on("touchstart", decode.success(ButtonTouched)),
-  ]
+  // 通常ボタンの属性 (Idle / Cooperate 共通)
+  let normal_btn_class =
+    "px-10 py-4 rounded-full bg-gradient-to-r from-pink to-lavender text-white font-bold text-lg shadow-lg hover:scale-105 active:scale-95 transition-all duration-200 cursor-pointer"
+
+  // Dodge / Clone 用: fixed ポジション固定ボタンの共通スタイル
+  let fixed_btn_class =
+    "px-10 py-4 rounded-full bg-gradient-to-r from-pink to-lavender text-white font-bold text-lg shadow-lg cursor-pointer"
+
+  // レイアウト崩れを防ぐ透明プレースホルダー
+  let placeholder =
+    html.div([attribute.class("h-14 w-48 opacity-0 pointer-events-none")], [])
+
   case model.phase {
     ShowResult(_) -> html.div([], [])
-    Evading(Dodging(pos, _)) -> {
-      // 通常フローに空のプレースホルダーを残しつつ
-      // 本体ボタンを fixed で自由に動かす
+
+    // ――― Dodge: fixed ポジションで逃げ回る ―――
+    Evading(Dodging(pos, count)) -> {
       let x = int.to_string(float.round(pos.x))
       let y = int.to_string(float.round(pos.y))
+      let transition = dodge_transition(count)
       html.div([], [
-        html.div(
-          [attribute.class("h-14 w-48 opacity-0 pointer-events-none")],
-          [],
-        ),
+        placeholder,
         html.button(
           [
-            attribute.class(
-              "px-10 py-4 rounded-full bg-gradient-to-r from-pink to-lavender text-white font-bold text-lg shadow-lg cursor-pointer",
-            ),
+            attribute.class(fixed_btn_class),
             attribute.style("position", "fixed"),
             attribute.style("left", x <> "px"),
             attribute.style("top", y <> "px"),
-            attribute.style(
-              "transition",
-              "left 0.25s ease-out, top 0.25s ease-out",
-            ),
+            attribute.style("transition", transition),
             attribute.style("z-index", "50"),
-            ..common_attrs
+            event.on_click(ButtonClicked(0)),
+            event.on("mouseenter", decode.success(ButtonHovered)),
+            event.on("touchstart", decode.success(ButtonTouched)),
           ],
           [html.text("くじを引く")],
         ),
       ])
     }
-    _ ->
+
+    // ――― Clone: 残っている分身ボタンを表示 (外れを押すたびに減る) ―――
+    Evading(Cloning(clones)) ->
+      html.div([], [placeholder, ..render_clones(clones, 0, fixed_btn_class)])
+
+    // ――― Excuse: disabled ボタン (言い訳は吹き出しに表示 / ボタンは固定テキスト) ―――
+    Evading(Excusing(_, _)) ->
       html.button(
         [
           attribute.class(
-            "px-10 py-4 rounded-full bg-gradient-to-r from-pink to-lavender text-white font-bold text-lg shadow-lg hover:scale-105 active:scale-95 transition-all duration-200 cursor-pointer",
+            "px-10 py-4 rounded-full bg-gradient-to-r from-[#C8C8C8] to-[#D8D8D8] text-white font-bold text-lg shadow cursor-not-allowed opacity-70",
           ),
-          ..common_attrs
+          attribute.disabled(True),
+        ],
+        [html.text("くじを引く")],
+      )
+
+    // ――― Camo: ランダム位置に fixed で配置しつつ背景色に擬態 ―――
+    Evading(Camouflaging(pos)) -> {
+      let x = int.to_string(float.round(pos.x))
+      let y = int.to_string(float.round(pos.y))
+      html.div([], [
+        placeholder,
+        html.button(
+          [
+            attribute.class(
+              "px-10 py-4 rounded-full font-bold text-lg cursor-pointer border-2",
+            ),
+            attribute.style("position", "fixed"),
+            attribute.style("left", x <> "px"),
+            attribute.style("top", y <> "px"),
+            attribute.style("z-index", "50"),
+            attribute.style("background-color", "var(--color-cream)"),
+            attribute.style("color", "var(--color-cream)"),
+            attribute.style("border-color", "var(--color-cream-dark)"),
+            event.on_click(ButtonClicked(0)),
+          ],
+          [html.text("くじを引く")],
+        ),
+      ])
+    }
+
+    // ――― Cooperate: 素直にそのまま押せる ―――
+    Evading(Cooperating) ->
+      html.button(
+        [
+          attribute.class(normal_btn_class),
+          event.on_click(ButtonClicked(0)),
+        ],
+        [html.text("くじを引く")],
+      )
+
+    // ――― Idle / その他: 通常ボタン (ホバーで逃げる) ―――
+    _ ->
+      html.button(
+        [
+          attribute.class(normal_btn_class),
+          event.on_click(ButtonClicked(0)),
+          event.on("mouseenter", decode.success(ButtonHovered)),
+          event.on("touchstart", decode.success(ButtonTouched)),
         ],
         [html.text("くじを引く")],
       )
   }
+}
+
+// Clone リスト全体を再帰的にレンダリング (残像が消えた後も対応)
+fn render_clones(
+  clones: List(CloneButton),
+  index: Int,
+  class: String,
+) -> List(Element(Msg)) {
+  case clones {
+    [] -> []
+    [head, ..tail] -> [
+      render_clone_button(head, index, class),
+      ..render_clones(tail, index + 1, class)
+    ]
+  }
+}
+
+// Clone ボタン 1 つをレンダリング
+fn render_clone_button(
+  clone: CloneButton,
+  index: Int,
+  class: String,
+) -> Element(Msg) {
+  let x = int.to_string(float.round(clone.pos.x))
+  let y = int.to_string(float.round(clone.pos.y))
+  html.button(
+    [
+      attribute.class(class),
+      attribute.style("position", "fixed"),
+      attribute.style("left", x <> "px"),
+      attribute.style("top", y <> "px"),
+      attribute.style("z-index", "50"),
+      attribute.style("transition", "opacity 0.2s ease"),
+      event.on_click(ButtonClicked(index)),
+    ],
+    [html.text("くじを引く")],
+  )
 }
 
 fn result_view(model: Model) -> Element(Msg) {
