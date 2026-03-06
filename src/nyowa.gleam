@@ -32,8 +32,16 @@ pub fn init(_flags: Nil) -> #(Model, effect.Effect(Msg)) {
 
 pub fn update(m: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
   case msg {
-    model.ButtonHovered -> handle_evasion(m, False)
-    model.ButtonTouched -> handle_evasion(m, True)
+    model.ButtonHovered -> {
+      let #(rand, now_ms, pre_pos, pre_clones) =
+        generate_evasion_inputs(m.viewport)
+      handle_evasion(m, False, rand, now_ms, pre_pos, pre_clones)
+    }
+    model.ButtonTouched -> {
+      let #(rand, now_ms, pre_pos, pre_clones) =
+        generate_evasion_inputs(m.viewport)
+      handle_evasion(m, True, rand, now_ms, pre_pos, pre_clones)
+    }
 
     model.GhostClickExpired -> #(
       model.Model(..m, recently_touched: False),
@@ -45,12 +53,13 @@ pub fn update(m: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
         model.Evading(model.Dodging(_, _)) ->
           case m.recently_touched {
             True -> #(m, effect.none())
-            False -> do_catch(m)
+            False -> do_catch(m, ffi.random(), ffi.random())
           }
 
         model.Evading(model.Cloning(clones)) ->
           case evasion.clone_at(clones, index) {
-            Ok(model.CloneButton(_, True)) -> do_catch(m)
+            Ok(model.CloneButton(_, True)) ->
+              do_catch(m, ffi.random(), ffi.random())
             Ok(model.CloneButton(_, False)) -> #(
               model.Model(
                 ..m,
@@ -66,11 +75,17 @@ pub fn update(m: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
           }
 
         model.Evading(model.Excusing(_, _)) -> #(m, effect.none())
-        model.Evading(model.Camouflaging(_)) -> do_catch(m)
-        model.Evading(model.Cooperating) -> do_catch(m)
+        model.Evading(model.Camouflaging(_)) ->
+          do_catch(m, ffi.random(), ffi.random())
+        model.Evading(model.Cooperating) ->
+          do_catch(m, ffi.random(), ffi.random())
 
         model.Idle ->
-          do_catch(model.Model(..m, first_interact_at: Some(ffi.now())))
+          do_catch(
+            model.Model(..m, first_interact_at: Some(ffi.now())),
+            ffi.random(),
+            ffi.random(),
+          )
 
         _ -> #(m, effect.none())
       }
@@ -159,15 +174,91 @@ pub fn update(m: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
   }
 }
 
-fn do_catch(m: Model) -> #(Model, effect.Effect(Msg)) {
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
+
+/// update の呼び出し境界で FFI を実行して handle_evasion に渡す値をまとめて生成する
+fn generate_evasion_inputs(
+  viewport: #(Float, Float),
+) -> #(Float, Float, model.Position, List(model.CloneButton)) {
+  let rand = ffi.random()
+  let now_ms = ffi.now()
+  let pre_pos = evasion.random_pos(viewport, ffi.random(), ffi.random())
+  let pre_clones =
+    evasion.generate_clones(
+      ffi.random(),
+      evasion.random_pos(viewport, ffi.random(), ffi.random()),
+      evasion.random_pos(viewport, ffi.random(), ffi.random()),
+      evasion.random_pos(viewport, ffi.random(), ffi.random()),
+    )
+  #(rand, now_ms, pre_pos, pre_clones)
+}
+
+/// 回避処理 (乱数・時刻・位置・クローンは呼び出し側が生成して渡す / 純粋関数)
+fn handle_evasion(
+  m: Model,
+  is_touch: Bool,
+  rand: Float,
+  now_ms: Float,
+  pre_pos: model.Position,
+  pre_clones: List(model.CloneButton),
+) -> #(Model, effect.Effect(Msg)) {
+  let touch_eff = case is_touch {
+    True -> ffi.delay_msg(model.GhostClickExpired, 500)
+    False -> effect.none()
+  }
+  case m.phase {
+    model.Idle -> {
+      let #(state, dialogue_text, pattern_eff) =
+        evasion.select_evasion_pattern(rand, pre_pos, pre_clones)
+      #(
+        model.Model(
+          ..m,
+          phase: model.Evading(state),
+          recently_touched: is_touch,
+          dialogue: Some(dialogue_text),
+          first_interact_at: Some(now_ms),
+        ),
+        effect.batch([pattern_eff, touch_eff]),
+      )
+    }
+
+    model.Evading(model.Dodging(_, count)) -> {
+      let new_evade_count = m.evade_count + 1
+      let next_count = count + 1
+      #(
+        model.Model(
+          ..m,
+          phase: model.Evading(model.Dodging(
+            pos: pre_pos,
+            evade_count: next_count,
+          )),
+          evade_count: new_evade_count,
+          dialogue: Some(content.dodge_dialogue(next_count)),
+          recently_touched: is_touch,
+        ),
+        touch_eff,
+      )
+    }
+
+    _ -> #(m, effect.none())
+  }
+}
+
+/// 捕捉処理 (rand_fortune, rand_anim は呼び出し側が生成して渡す / 純粋関数)
+fn do_catch(
+  m: Model,
+  rand_fortune: Float,
+  rand_anim: Float,
+) -> #(Model, effect.Effect(Msg)) {
   let idle_ms = case m.first_interact_at {
     Some(t) -> t -. m.idle_started_at
     None -> 0.0
   }
   let mood = fortune.determine_mood(m.evade_count, idle_ms)
-  let ft = fortune.select_fortune(mood, ffi.random())
-  let rand = ffi.random()
-  case rand <. 0.15 {
+  let ft = fortune.select_fortune(mood, rand_fortune)
+  case rand_anim <. 0.15 {
     True -> #(
       model.Model(
         ..m,
@@ -177,7 +268,7 @@ fn do_catch(m: Model) -> #(Model, effect.Effect(Msg)) {
       ffi.delay_msg(model.DrawComplete(ft), 900),
     )
     False ->
-      case rand <. 0.55 {
+      case rand_anim <. 0.55 {
         True -> #(
           model.Model(
             ..m,
@@ -187,7 +278,7 @@ fn do_catch(m: Model) -> #(Model, effect.Effect(Msg)) {
           ffi.delay_msg(model.DrawComplete(ft), 2800),
         )
         False ->
-          case rand <. 0.8 {
+          case rand_anim <. 0.8 {
             True -> #(
               model.Model(
                 ..m,
@@ -212,49 +303,6 @@ fn do_catch(m: Model) -> #(Model, effect.Effect(Msg)) {
             )
           }
       }
-  }
-}
-
-fn handle_evasion(m: Model, is_touch: Bool) -> #(Model, effect.Effect(Msg)) {
-  let touch_eff = case is_touch {
-    True -> ffi.delay_msg(model.GhostClickExpired, 500)
-    False -> effect.none()
-  }
-  case m.phase {
-    model.Idle -> {
-      let rand = ffi.random()
-      let interact_time = ffi.now()
-      let #(state, dialogue_text, pattern_eff) =
-        evasion.select_evasion_pattern(rand, m.viewport)
-      #(
-        model.Model(
-          ..m,
-          phase: model.Evading(state),
-          recently_touched: is_touch,
-          dialogue: Some(dialogue_text),
-          first_interact_at: Some(interact_time),
-        ),
-        effect.batch([pattern_eff, touch_eff]),
-      )
-    }
-
-    model.Evading(model.Dodging(_, count)) -> {
-      let new_evade_count = m.evade_count + 1
-      let next_count = count + 1
-      let pos = evasion.random_pos(m.viewport)
-      #(
-        model.Model(
-          ..m,
-          phase: model.Evading(model.Dodging(pos: pos, evade_count: next_count)),
-          evade_count: new_evade_count,
-          dialogue: Some(content.dodge_dialogue(next_count)),
-          recently_touched: is_touch,
-        ),
-        touch_eff,
-      )
-    }
-
-    _ -> #(m, effect.none())
   }
 }
 

@@ -4,25 +4,25 @@ import nyowa/content
 import nyowa/ffi
 import nyowa/model.{type CloneButton, type EvasionState, type Msg, type Position}
 
+/// パターン選択 (rand / 位置 / クローンはすべて呼び出し側で生成して渡す)
 pub fn select_evasion_pattern(
   rand: Float,
-  viewport: #(Float, Float),
+  pre_pos: Position,
+  pre_clones: List(CloneButton),
 ) -> #(EvasionState, String, effect.Effect(Msg)) {
   case rand <. 0.3 {
-    True -> {
-      let pos = random_pos(viewport)
-      #(
-        model.Dodging(pos: pos, evade_count: 1),
-        content.dodge_initial,
-        effect.none(),
-      )
-    }
+    True -> #(
+      model.Dodging(pos: pre_pos, evade_count: 1),
+      content.dodge_initial,
+      effect.none(),
+    )
     False ->
       case rand <. 0.5 {
-        True -> {
-          let clones = generate_clones(viewport)
-          #(model.Cloning(clones: clones), content.clone_initial, effect.none())
-        }
+        True -> #(
+          model.Cloning(clones: pre_clones),
+          content.clone_initial,
+          effect.none(),
+        )
         False ->
           case rand <. 0.7 {
             True -> {
@@ -35,14 +35,11 @@ pub fn select_evasion_pattern(
             }
             False ->
               case rand <. 0.85 {
-                True -> {
-                  let pos = random_pos(viewport)
-                  #(
-                    model.Camouflaging(pos: pos),
-                    content.camo_initial,
-                    effect.none(),
-                  )
-                }
+                True -> #(
+                  model.Camouflaging(pos: pre_pos),
+                  content.camo_initial,
+                  effect.none(),
+                )
                 False -> #(
                   model.Cooperating,
                   content.cooperate_initial,
@@ -54,11 +51,14 @@ pub fn select_evasion_pattern(
   }
 }
 
-pub fn generate_clones(viewport: #(Float, Float)) -> List(CloneButton) {
-  let real_idx = float.round(ffi.random() *. 2.0)
-  let p0 = random_pos(viewport)
-  let p1 = random_pos(viewport)
-  let p2 = random_pos(viewport)
+/// クローン生成 (乱数 / 位置はすべて呼び出し側で生成して渡す)
+pub fn generate_clones(
+  rand_real: Float,
+  p0: Position,
+  p1: Position,
+  p2: Position,
+) -> List(CloneButton) {
+  let real_idx = float.round(rand_real *. 2.0)
   [
     model.CloneButton(pos: p0, is_real: real_idx == 0),
     model.CloneButton(pos: p1, is_real: real_idx == 1),
@@ -66,17 +66,15 @@ pub fn generate_clones(viewport: #(Float, Float)) -> List(CloneButton) {
   ]
 }
 
-pub fn random_pos(viewport: #(Float, Float)) -> Position {
+/// ランダム座標生成 (rx/ry は呼び出し側で ffi.random() して渡す)
+pub fn random_pos(viewport: #(Float, Float), rx: Float, ry: Float) -> Position {
   let #(vp_w, vp_h) = viewport
   let btn_w = 220.0
   let btn_h = 64.0
   let margin = 24.0
   let usable_w = float.max(vp_w -. btn_w -. margin *. 2.0, 0.0)
   let usable_h = float.max(vp_h -. btn_h -. margin *. 2.0, 0.0)
-  model.Position(
-    x: ffi.random() *. usable_w +. margin,
-    y: ffi.random() *. usable_h +. margin,
-  )
+  model.Position(x: rx *. usable_w +. margin, y: ry *. usable_h +. margin)
 }
 
 pub fn dodge_transition(dodge_count: Int) -> String {
