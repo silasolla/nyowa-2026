@@ -34,7 +34,7 @@ pub const char_drowsy = "（ -ω- ）zzZ"
 
 pub const dialogue_prefix = "💬 "
 
-pub const instant_icon = "(ありえんデカいくしゃみ)"
+pub const instant_icon = "🤧"
 
 // ---------------------------------------------------------------------------
 // UI ラベル
@@ -80,7 +80,7 @@ pub fn excuse_text(index: Int) -> String {
   case index {
     0 -> "ただいま休憩中"
     1 -> "17時回ったんで"
-    _ -> "システム障害（嘘）"
+    _ -> "システム障害 (嘘)"
   }
 }
 
@@ -110,7 +110,7 @@ pub const draw_instant = "にょっ！！"
 
 pub const draw_spinning = "にょわにょわ……"
 
-pub const draw_paused = "んんっ！！"
+pub const draw_paused = "つかれたにょわ……"
 
 pub const draw_reversing = "……わょにわょに"
 
