@@ -78,7 +78,7 @@ fn dialogue_view(m: Model) -> Element(Msg) {
       }
   }
   case text {
-    "" -> html.div([], [])
+    "" -> element.none()
     _ ->
       html.div(
         [
@@ -100,8 +100,8 @@ fn button_view(m: Model) -> Element(Msg) {
     html.div([attribute.class("h-14 w-48 opacity-0 pointer-events-none")], [])
 
   case m.phase {
-    model.ShowResult(_) -> html.div([], [])
-    model.Drawing(_) -> html.div([], [])
+    model.ShowResult(_) -> element.none()
+    model.Drawing(_) -> element.none()
 
     model.Evading(model.Dodging(pos, count)) -> {
       let x = int.to_string(float.round(pos.x))
@@ -268,7 +268,7 @@ fn drawing_view(m: Model) -> Element(Msg) {
         ],
       )
     }
-    _ -> html.div([], [])
+    _ -> element.none()
   }
 }
 
@@ -319,6 +319,6 @@ fn result_view(m: Model) -> Element(Msg) {
         ],
       )
     }
-    _ -> html.div([], [])
+    _ -> element.none()
   }
 }
