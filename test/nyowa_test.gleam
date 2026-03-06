@@ -1,3 +1,4 @@
+import gleam/option.{None, Some}
 import gleeunit
 import gleeunit/should
 import nyowa
@@ -18,6 +19,11 @@ pub fn init_evade_count_is_zero_test() {
   model.evade_count |> should.equal(0)
 }
 
+pub fn init_first_interact_at_is_none_test() {
+  let #(model, _) = nyowa.init(Nil)
+  model.first_interact_at |> should.equal(None)
+}
+
 // --- update: GotTimestamp ---
 
 pub fn got_timestamp_sets_page_loaded_at_test() {
@@ -26,7 +32,23 @@ pub fn got_timestamp_sets_page_loaded_at_test() {
   updated.page_loaded_at |> should.equal(1_234_567.0)
 }
 
-// --- update: ButtonClicked ガード ---
+// --- update: ButtonClicked ---
+
+pub fn button_clicked_while_idle_transitions_to_show_result_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let #(updated, _) = nyowa.update(model, nyowa.ButtonClicked(0))
+  case updated.phase {
+    nyowa.ShowResult(_) -> Nil
+    _ -> should.fail()
+  }
+}
+
+pub fn button_clicked_records_first_interact_at_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let with_ts = nyowa.update(model, nyowa.GotTimestamp(9999.0)).0
+  let #(updated, _) = nyowa.update(with_ts, nyowa.ButtonClicked(0))
+  updated.first_interact_at |> should.equal(Some(9999.0))
+}
 
 pub fn button_clicked_while_evading_is_ignored_test() {
   let #(model, _) = nyowa.init(Nil)
@@ -42,12 +64,6 @@ pub fn button_clicked_while_evading_is_ignored_test() {
   updated.phase |> should.equal(evading.phase)
 }
 
-pub fn button_clicked_while_idle_transitions_to_caught_test() {
-  let #(model, _) = nyowa.init(Nil)
-  let #(updated, _) = nyowa.update(model, nyowa.ButtonClicked(0))
-  updated.phase |> should.equal(nyowa.Caught)
-}
-
 // --- update: PlayAgain ---
 
 pub fn play_again_resets_to_idle_test() {
@@ -55,7 +71,7 @@ pub fn play_again_resets_to_idle_test() {
   let in_result =
     nyowa.Model(
       ..model,
-      phase: nyowa.Result(nyowa.Fortune(
+      phase: nyowa.ShowResult(nyowa.Fortune(
         rank: "大吉",
         message: "テスト",
         mood: nyowa.Neutral,
@@ -65,4 +81,11 @@ pub fn play_again_resets_to_idle_test() {
   let #(updated, _) = nyowa.update(in_result, nyowa.PlayAgain)
   updated.phase |> should.equal(nyowa.Idle)
   updated.evade_count |> should.equal(0)
+}
+
+pub fn play_again_clears_first_interact_at_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let with_interact = nyowa.Model(..model, first_interact_at: Some(12_345.0))
+  let #(updated, _) = nyowa.update(with_interact, nyowa.PlayAgain)
+  updated.first_interact_at |> should.equal(None)
 }
