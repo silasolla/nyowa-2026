@@ -101,8 +101,8 @@
 | ------ | ------- | ------------------ |
 | 1      | Sleepy  | `idle >= 120s`     |
 | 2      | Rested  | `idle >= 30s`      |
-| 3      | Furious | `evade_count >= 6` |
-| 4      | Grumpy  | `evade_count >= 3` |
+| 3      | Furious | `evade_count >= 4` |
+| 4      | Grumpy  | `evade_count >= 2` |
 | 5      | Neutral | その他             |
 
 #### Rested が Furious より優先される理由

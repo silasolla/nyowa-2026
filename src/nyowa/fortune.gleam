@@ -16,10 +16,10 @@ pub fn determine_mood(evade_count: Int, idle_ms: Float) -> Mood {
       case idle_s >=. 30.0 {
         True -> model.Rested
         False ->
-          case evade_count >= 6 {
+          case evade_count >= 4 {
             True -> model.Furious
             False ->
-              case evade_count >= 3 {
+              case evade_count >= 2 {
                 True -> model.Grumpy
                 False -> model.Neutral
               }
