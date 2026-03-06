@@ -1,4 +1,5 @@
 import gleam/float
+import gleam/int
 import lustre/effect
 import nyowa/content
 import nyowa/ffi
@@ -58,7 +59,9 @@ pub fn generate_clones(
   p1: Position,
   p2: Position,
 ) -> List(CloneButton) {
-  let real_idx = float.round(rand_real *. 2.0)
+  // float.round(rand * 2.0) では中央が 50% に偏るため、
+  // float.truncate(rand * 3.0) で 3 等分して均等にする
+  let real_idx = float.truncate(rand_real *. 3.0) |> int.min(2)
   [
     model.CloneButton(pos: p0, is_real: real_idx == 0),
     model.CloneButton(pos: p1, is_real: real_idx == 1),
