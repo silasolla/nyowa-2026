@@ -1,30 +1,39 @@
 # にょわくじ2026
 
-[Gleam](https://gleam.run) + [Lustre](https://lustre.build) のシンプルなプロジェクトです．Cloudflare Pages にホスティングします．
+全力で抵抗するおみくじアプリにょわ．
 
-Gleam が JavaScript にコンパイルされて，ブラウザ上で動作 (CSR) します．
+→ **[docs/GAMEPLAY.md](docs/GAMEPLAY.md)** — アプリ仕様  
+→ **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — 技術設計
 
-## 開発
+---
+
+## 開発環境
 
 ```sh
 # 依存関係のインストール
 gleam deps download
 
-# 開発サーバの起動
-gleam run -m lustre/dev -- dev 
-
-# テストの実行
+# テスト
 gleam test
 
-# コードのフォーマット
-gleam format src test
+# ローカル開発サーバ
+gleam run -m lustre/dev -- start
 ```
 
-## ビルド・デプロイ
+## ビルド (`dist/` に出力)
 
 ```sh
-# dist/ にビルド
-gleam run -m lustre/dev -- build 
+gleam run -m lustre/dev -- build
 ```
 
-`main` ブランチへの push で GitHub Actions が自動的にビルドし Cloudflare Pages にデプロイします．
+## デプロイ
+
+`main` ブランチに push すると GitHub Actions がテスト → ビルド → Cloudflare Pages デプロイを実行します．
+
+必要な GitHub シークレット / 変数:
+
+| 名前                      | 種別     | 説明                     |
+| ------------------------- | -------- | ------------------------ |
+| `CLOUDFLARE_API_TOKEN`    | Secret   | Cloudflare API トークン  |
+| `CLOUDFLARE_ACCOUNT_ID`   | Secret   | Cloudflare アカウント ID |
+| `CLOUDFLARE_PROJECT_NAME` | Variable | Pages プロジェクト名     |
