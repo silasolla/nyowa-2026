@@ -27,16 +27,6 @@ pub fn init_recently_touched_is_false_test() {
 }
 
 // ---------------------------------------------------------------------------
-// GotTimestamp
-// ---------------------------------------------------------------------------
-
-pub fn got_timestamp_sets_idle_started_at_test() {
-  let #(model, _) = nyowa.init(Nil)
-  let #(updated, _) = nyowa.update(model, nyowa.GotTimestamp(1_234_567.0))
-  updated.idle_started_at |> should.equal(1_234_567.0)
-}
-
-// ---------------------------------------------------------------------------
 // ButtonHovered — パターン選択
 // ---------------------------------------------------------------------------
 

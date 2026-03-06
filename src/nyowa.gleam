@@ -52,7 +52,6 @@ pub type EvasionState {
 pub type Phase {
   Idle
   Evading(state: EvasionState)
-  Caught
   Drawing(state: DrawState)
   ShowResult(fortune: Fortune)
 }
@@ -75,14 +74,9 @@ pub type Msg {
   ButtonClicked(index: Int)
   GhostClickExpired
   ExcuseExpired
-  DrawTick
   DrawInterruption(DrawState)
   DrawComplete(Fortune)
-  TransitionDone
   PlayAgain
-  GotTimestamp(Float)
-  GotRandom(Float)
-  GotViewport(Float, Float)
   ClearDialogue
 }
 
@@ -110,10 +104,6 @@ pub fn init(_flags: Nil) -> #(Model, effect.Effect(Msg)) {
 
 pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
   case msg {
-    GotTimestamp(ts) -> #(Model(..model, idle_started_at: ts), effect.none())
-
-    GotViewport(w, h) -> #(Model(..model, viewport: #(w, h)), effect.none())
-
     ButtonHovered -> handle_evasion(model, False)
     ButtonTouched -> handle_evasion(model, True)
 
@@ -231,10 +221,6 @@ pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
         )
         _ -> #(model, effect.none())
       }
-
-    DrawTick -> #(model, effect.none())
-    TransitionDone -> #(model, effect.none())
-    GotRandom(_) -> #(model, effect.none())
   }
 }
 
@@ -591,7 +577,6 @@ fn character_view(model: Model) -> Element(Msg) {
     Idle -> #("（ ˘ω˘ ）", "animate-float")
     Evading(Cooperating) -> #("（ ˘ω˘ ）", "animate-float")
     Evading(_) -> #("（ >ω< ）", "animate-shake")
-    Caught -> #("（ ＞ω＜）！", "animate-shake")
     Drawing(Instant) -> #("（ ˘ᴗ˘ ）", "animate-float")
     Drawing(Spinning) -> #("（ ●ω● ）", "animate-shake")
     Drawing(Paused) -> #("（ ˘ω˘ ）", "animate-breathe")
