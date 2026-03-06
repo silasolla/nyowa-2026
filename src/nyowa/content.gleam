@@ -34,7 +34,7 @@ pub const char_drowsy = "（ -ω- ）zzZ"
 
 pub const dialogue_prefix = "💬 "
 
-pub const instant_icon = "✨"
+pub const instant_icon = "(ありえんデカいくしゃみ)"
 
 // ---------------------------------------------------------------------------
 // UI ラベル
@@ -60,9 +60,9 @@ pub const idle_default = "くじ……？にょわ〜……"
 
 pub const dodge_initial = "えっ……にょわ……"
 
-pub const clone_initial = "どれが本物でしょ〜にょわ……"
+pub const clone_initial = "にょわ分身……にょわ〜……"
 
-pub const camo_initial = "にょわ……どこだ〜……"
+pub const camo_initial = "にょわ隠れ……にょわ〜……"
 
 pub const cooperate_initial = "しゃーない、引かせてやるか……"
 
@@ -78,7 +78,7 @@ pub const clone_fake_hit = "それ残像です……"
 
 pub fn excuse_text(index: Int) -> String {
   case index {
-    0 -> "今休憩中"
+    0 -> "ただいま休憩中"
     1 -> "17時回ったんで"
     _ -> "システム障害（嘘）"
   }
@@ -106,13 +106,13 @@ pub fn dodge_dialogue(count: Int) -> String {
 // Drawing 演出ダイアログ
 // ---------------------------------------------------------------------------
 
-pub const draw_instant = "回すのめんどいから直接出すね"
+pub const draw_instant = "にょっ！！"
 
 pub const draw_spinning = "にょわにょわ……"
 
-pub const draw_paused = "あ、ごめん回すの疲れたわ"
+pub const draw_paused = "んんっ！！"
 
-pub const draw_reversing = "気分じゃないから巻き戻すね"
+pub const draw_reversing = "……わょにわょに"
 
 // ---------------------------------------------------------------------------
 // Drawing スロットドラム
