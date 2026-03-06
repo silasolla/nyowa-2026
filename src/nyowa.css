@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+/* ビルドで *.gleam のクラスが消えないようにする */
+@source "./**/*.gleam";
+
+@theme {
+  --font-sans: "Noto Sans JP", sans-serif;
+
+  /* カラーパレット */
+  --color-cream:        #FFF8F0;
+  --color-cream-dark:   #F5E6D3;
+  --color-pink:         #FFB7C5;
+  --color-pink-light:   #FFD6DF;
+  --color-lavender:     #C9B8E8;
+  --color-lavender-light: #E4DBFF;
+  --color-text:         #4A4A4A;
+  --color-text-muted:   #9B9B9B;
+  --color-accent-happy: #FFE566;  /* にょわり */
+  --color-accent-angry: #FF8B8B;  /* おこ */
+
+  /* アニメーション */
+  --animate-breathe: breathe 3s ease-in-out infinite;
+  --animate-float:   float 4s ease-in-out infinite;
+  --animate-shake:   shake 0.15s infinite ease-in-out;
+  --animate-pop-in:  pop-in 0.2s ease-out both;
+  --animate-fade-in: fade-in 0.3s ease-out both;
+
+  @keyframes breathe {
+    0%, 100% { transform: translateY(0); }
+    50%       { transform: translateY(-6px); }
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0) rotate(-1deg); }
+    50%       { transform: translateY(-10px) rotate(1deg); }
+  }
+
+  @keyframes shake {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    25%       { transform: translateY(-2px) rotate(-2deg); }
+    75%       { transform: translateY(2px) rotate(2deg); }
+  }
+
+  @keyframes pop-in {
+    from { transform: scale(0); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
+  }
+
+  @keyframes fade-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+}

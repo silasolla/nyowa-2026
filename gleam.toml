@@ -1,0 +1,31 @@
+name = "nyowa"
+version = "1.0.0"
+target = "javascript"
+
+[tools.lustre.build]
+minify = true
+
+[tools.lustre.html]
+lang = "ja"
+title = "にょわくじ2026"
+
+[[tools.lustre.html.links]]
+rel = "preconnect"
+href = "https://fonts.googleapis.com"
+
+[[tools.lustre.html.links]]
+rel = "preconnect"
+href = "https://fonts.gstatic.com"
+crossorigin = true
+
+[[tools.lustre.html.links]]
+rel = "stylesheet"
+href = "https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap"
+
+[dependencies]
+gleam_stdlib = ">= 0.44.0 and < 2.0.0"
+lustre = ">= 5.6.0 and < 6.0.0"
+
+[dev-dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"
+lustre_dev_tools = ">= 2.3.4 and < 3.0.0"
