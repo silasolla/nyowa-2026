@@ -1,3 +1,6 @@
+import gleam/dynamic/decode
+import gleam/float
+import gleam/int
 import gleam/option.{type Option, None, Some}
 import lustre
 import lustre/attribute
@@ -61,6 +64,7 @@ pub type Model {
     evade_count: Int,
     viewport: #(Float, Float),
     dialogue: Option(String),
+    recently_touched: Bool,
   )
 }
 
@@ -68,6 +72,7 @@ pub type Msg {
   ButtonHovered
   ButtonTouched
   ButtonClicked(index: Int)
+  GhostClickExpired
   ExcuseExpired
   DrawTick
   DrawInterruption(DrawState)
@@ -90,8 +95,9 @@ pub fn init(_flags: Nil) -> #(Model, effect.Effect(Msg)) {
       page_loaded_at: 0.0,
       first_interact_at: None,
       evade_count: 0,
-      viewport: #(375.0, 812.0),
+      viewport: get_viewport_size(),
       dialogue: None,
+      recently_touched: False,
     )
   #(model, get_timestamp())
 }
@@ -106,27 +112,45 @@ pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
 
     GotViewport(w, h) -> #(Model(..model, viewport: #(w, h)), effect.none())
 
+    // PC: マウスホバー → Dodge 発動
+    ButtonHovered -> handle_evasion(model, False)
+
+    // モバイル: タッチ開始 → Dodge 発動 + ゴーストクリック防止タイマー起動
+    ButtonTouched -> handle_evasion(model, True)
+
+    GhostClickExpired -> #(
+      Model(..model, recently_touched: False),
+      effect.none(),
+    )
+
     ButtonClicked(_index) ->
       case model.phase {
-        // 抵抗中はゴーストクリックなどを無視 (Phase 2 以降で有効活用)
+        // 逃げている最中かつゴーストクリック猶予中は無視
+        Evading(Dodging(_, _)) ->
+          case model.recently_touched {
+            True -> #(model, effect.none())
+            False ->
+              // ボタンを捕まえた
+              #(
+                Model(
+                  ..model,
+                  phase: ShowResult(placeholder_fortune()),
+                  first_interact_at: Some(model.page_loaded_at),
+                ),
+                effect.none(),
+              )
+          }
+        // Phase 3 以降で実装する他の逃げパターン中はまだ無視
         Evading(_) -> #(model, effect.none())
-        Idle -> {
-          // Phase 1: 固定おみくじを即時表示 (Phase 4 で機嫌・乱数に基づく選択に差し替え）
-          let fortune =
-            Fortune(
-              rank: "めんどくさいから大吉",
-              message: "まあ、せっかく来てくれたんだし……はい、これ。",
-              mood: Neutral,
-            )
-          #(
-            Model(
-              ..model,
-              phase: ShowResult(fortune),
-              first_interact_at: Some(model.page_loaded_at),
-            ),
-            effect.none(),
-          )
-        }
+        // Idle 時はホバー前に直クリックされた場合 (レア)
+        Idle -> #(
+          Model(
+            ..model,
+            phase: ShowResult(placeholder_fortune()),
+            first_interact_at: Some(model.page_loaded_at),
+          ),
+          effect.none(),
+        )
         _ -> #(model, effect.none())
       }
 
@@ -137,12 +161,12 @@ pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
         evade_count: 0,
         dialogue: None,
         first_interact_at: None,
+        recently_touched: False,
       ),
       effect.none(),
     )
 
-    // Phase 2 以降で実装するメッセージ
-    ButtonHovered | ButtonTouched -> #(model, effect.none())
+    // Phase 3 以降で実装するメッセージ
     ExcuseExpired -> #(model, effect.none())
     DrawTick -> #(model, effect.none())
     DrawInterruption(_) -> #(model, effect.none())
@@ -150,6 +174,64 @@ pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
     TransitionDone -> #(model, effect.none())
     GotRandom(_) -> #(model, effect.none())
   }
+}
+
+// Dodge 共通ロジック (PC ホバー・モバイルタッチ共用)
+fn handle_evasion(model: Model, is_touch: Bool) -> #(Model, effect.Effect(Msg)) {
+  case model.phase {
+    Idle | Evading(Dodging(_, _)) -> {
+      let new_evade_count = model.evade_count + 1
+      let new_dodge_count = case model.phase {
+        Evading(Dodging(_, c)) -> c + 1
+        _ -> 1
+      }
+      let pos = random_pos(model.viewport)
+      let new_phase = Evading(Dodging(pos: pos, evade_count: new_dodge_count))
+      let eff = case is_touch {
+        True -> delay_msg(GhostClickExpired, 500)
+        False -> effect.none()
+      }
+      #(
+        Model(
+          ..model,
+          phase: new_phase,
+          evade_count: new_evade_count,
+          dialogue: Some(dodge_dialogue(new_evade_count)),
+          recently_touched: is_touch,
+        ),
+        eff,
+      )
+    }
+    _ -> #(model, effect.none())
+  }
+}
+
+// ランダム位置を生成 (ビューポート内に収める)
+fn random_pos(viewport: #(Float, Float)) -> Position {
+  let #(vp_w, vp_h) = viewport
+  let btn_w = 220.0
+  let btn_h = 64.0
+  let margin = 24.0
+  let usable_w = float.max(vp_w -. btn_w -. margin *. 2.0, 0.0)
+  let usable_h = float.max(vp_h -. btn_h -. margin *. 2.0, 0.0)
+  Position(x: random() *. usable_w +. margin, y: random() *. usable_h +. margin)
+}
+
+// 逃げ回数に応じた吹き出しテキスト
+fn dodge_dialogue(count: Int) -> String {
+  case count {
+    1 -> "えっ……にょわ……"
+    2 -> "ちょっと待って……"
+    3 -> "まだ仕事中なんで……"
+    4 -> "もうちょっとだけ……"
+    5 -> "にょわにょわ……！"
+    _ -> "も、もう限界……にょわ……"
+  }
+}
+
+// Phase 1 〜 3 で使う固定おみくじ (Phase 4 で機嫌ベースに差し替え)
+fn placeholder_fortune() -> Fortune {
+  Fortune(rank: "めんどくさいから大吉", message: "まあ、せっかく来てくれたんだし……はい、これ。", mood: Neutral)
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +274,7 @@ fn header_view() -> Element(Msg) {
 fn character_view(model: Model) -> Element(Msg) {
   let #(char_text, anim_class) = case model.phase {
     Idle -> #("（ ˘ω˘ ）", "animate-float")
+    Evading(_) -> #("（ >ω< ）", "animate-shake")
     Caught -> #("（ ＞ω＜）！", "animate-shake")
     ShowResult(_) -> #("（ ^ω^ ）", "")
     _ -> #("（ ˘ω˘ ）", "animate-float")
@@ -202,10 +285,13 @@ fn character_view(model: Model) -> Element(Msg) {
 }
 
 fn dialogue_view(model: Model) -> Element(Msg) {
-  let text = case model.phase {
-    Idle -> "くじ……？にょわ〜……"
-    Caught -> "えっ……つかまった……"
-    _ -> ""
+  let text = case model.dialogue {
+    Some(t) -> t
+    None ->
+      case model.phase {
+        Idle -> "くじ……？にょわ〜……"
+        _ -> ""
+      }
   }
   case text {
     "" -> html.div([], [])
@@ -222,15 +308,49 @@ fn dialogue_view(model: Model) -> Element(Msg) {
 }
 
 fn button_view(model: Model) -> Element(Msg) {
+  let common_attrs = [
+    event.on_click(ButtonClicked(0)),
+    event.on("mouseenter", decode.success(ButtonHovered)),
+    event.on("touchstart", decode.success(ButtonTouched)),
+  ]
   case model.phase {
     ShowResult(_) -> html.div([], [])
+    Evading(Dodging(pos, _)) -> {
+      // 通常フローに空のプレースホルダーを残しつつ
+      // 本体ボタンを fixed で自由に動かす
+      let x = int.to_string(float.round(pos.x))
+      let y = int.to_string(float.round(pos.y))
+      html.div([], [
+        html.div(
+          [attribute.class("h-14 w-48 opacity-0 pointer-events-none")],
+          [],
+        ),
+        html.button(
+          [
+            attribute.class(
+              "px-10 py-4 rounded-full bg-gradient-to-r from-pink to-lavender text-white font-bold text-lg shadow-lg cursor-pointer",
+            ),
+            attribute.style("position", "fixed"),
+            attribute.style("left", x <> "px"),
+            attribute.style("top", y <> "px"),
+            attribute.style(
+              "transition",
+              "left 0.25s ease-out, top 0.25s ease-out",
+            ),
+            attribute.style("z-index", "50"),
+            ..common_attrs
+          ],
+          [html.text("くじを引く")],
+        ),
+      ])
+    }
     _ ->
       html.button(
         [
           attribute.class(
             "px-10 py-4 rounded-full bg-gradient-to-r from-pink to-lavender text-white font-bold text-lg shadow-lg hover:scale-105 active:scale-95 transition-all duration-200 cursor-pointer",
           ),
-          event.on_click(ButtonClicked(0)),
+          ..common_attrs
         ],
         [html.text("くじを引く")],
       )
@@ -290,15 +410,19 @@ pub fn main() {
 }
 
 // ---------------------------------------------------------------------------
-// Effects (FFI wrappers)
+// Effects / FFI wrappers
 // ---------------------------------------------------------------------------
 
 fn get_timestamp() -> effect.Effect(Msg) {
   effect.from(fn(dispatch) { dispatch(GotTimestamp(now())) })
 }
 
+fn delay_msg(msg: Msg, ms: Int) -> effect.Effect(Msg) {
+  effect.from(fn(dispatch) { set_timeout(fn() { dispatch(msg) }, ms) })
+}
+
 @external(javascript, "./nyowa_ffi.mjs", "setTimeoutFn")
-pub fn set_timeout(callback: fn() -> Nil, ms: Int) -> Nil
+fn set_timeout(callback: fn() -> Nil, ms: Int) -> Nil
 
 @external(javascript, "./nyowa_ffi.mjs", "now")
 fn now() -> Float

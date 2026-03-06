@@ -11,5 +11,6 @@ export function random() {
 }
 
 export function getViewportSize() {
-  return [globalThis.innerWidth, globalThis.innerHeight];
+  // Node.js では window が存在しないためデフォルト値を返す (テスト環境)
+  return [globalThis.innerWidth ?? 375, globalThis.innerHeight ?? 812];
 }
