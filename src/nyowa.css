@@ -19,11 +19,14 @@
   --color-accent-angry: #FF8B8B;  /* おこ */
 
   /* アニメーション */
-  --animate-breathe: breathe 3s ease-in-out infinite;
-  --animate-float:   float 4s ease-in-out infinite;
-  --animate-shake:   shake 0.15s infinite ease-in-out;
-  --animate-pop-in:  pop-in 0.2s ease-out both;
-  --animate-fade-in: fade-in 0.3s ease-out both;
+  --animate-breathe:        breathe 3s ease-in-out infinite;
+  --animate-float:          float 4s ease-in-out infinite;
+  --animate-shake:          shake 0.15s infinite ease-in-out;
+  --animate-pop-in:         pop-in 0.2s ease-out both;
+  --animate-fade-in:        fade-in 0.3s ease-out both;
+  --animate-drum-spin:      fortune-drum 1.5s linear infinite;
+  --animate-drum-reverse:   fortune-drum 1.5s linear infinite reverse;
+  --animate-drum-pause:     fortune-drum 1.5s linear infinite paused;
 
   @keyframes breathe {
     0%, 100% { transform: translateY(0); }
@@ -49,5 +52,11 @@
   @keyframes fade-in {
     from { opacity: 0; transform: translateY(4px); }
     to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ドラム式スロット: 8アイテム × 56px = 392px スクロール */
+  @keyframes fortune-drum {
+    from { transform: translateY(0); }
+    to   { transform: translateY(-392px); }
   }
 }

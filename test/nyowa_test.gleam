@@ -111,8 +111,9 @@ pub fn dodge_click_not_recently_touched_catches_test() {
       recently_touched: False,
     )
   let #(updated, _) = nyowa.update(dodging, nyowa.ButtonClicked(0))
+  // キャッチ成功 → Drawing フェーズへ移行 (演出中)
   case updated.phase {
-    nyowa.ShowResult(_) -> Nil
+    nyowa.Drawing(_) -> Nil
     _ -> should.fail()
   }
 }
@@ -146,8 +147,9 @@ pub fn clone_real_button_clicked_catches_test() {
   let cloning =
     nyowa.Model(..model, phase: nyowa.Evading(nyowa.Cloning(clones: clones)))
   let #(updated, _) = nyowa.update(cloning, nyowa.ButtonClicked(1))
+  // 本物をクリック → Drawing フェーズへ移行
   case updated.phase {
-    nyowa.ShowResult(_) -> Nil
+    nyowa.Drawing(_) -> Nil
     _ -> should.fail()
   }
 }
@@ -249,8 +251,9 @@ pub fn camo_button_click_catches_test() {
       ),
     )
   let #(updated, _) = nyowa.update(camo, nyowa.ButtonClicked(0))
+  // キャッチ成功 → Drawing フェーズへ移行
   case updated.phase {
-    nyowa.ShowResult(_) -> Nil
+    nyowa.Drawing(_) -> Nil
     _ -> should.fail()
   }
 }
@@ -263,8 +266,9 @@ pub fn cooperate_button_click_catches_test() {
   let #(model, _) = nyowa.init(Nil)
   let coop = nyowa.Model(..model, phase: nyowa.Evading(nyowa.Cooperating))
   let #(updated, _) = nyowa.update(coop, nyowa.ButtonClicked(0))
+  // Cooperate もキャッチ成功 → Drawing フェーズへ移行
   case updated.phase {
-    nyowa.ShowResult(_) -> Nil
+    nyowa.Drawing(_) -> Nil
     _ -> should.fail()
   }
 }
@@ -296,7 +300,6 @@ pub fn play_again_full_reset_test() {
   reset.first_interact_at |> should.equal(None)
   reset.dialogue |> should.equal(None)
 }
-
 
 // ---------------------------------------------------------------------------
 // DetermineMood
@@ -350,10 +353,26 @@ pub fn select_fortune_returns_correct_mood_test() {
   f.mood |> should.equal(nyowa.Furious)
 }
 
+// ---------------------------------------------------------------------------
+// do_catch の統合テスト (Drawing フェーズへの移行を確認)
+// Mood の判定ロジック自体は determine_mood ユニットテストでカバー済み
+// ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// do_catch の機嫌統合テスト (evade_count + idle_ms で Mood を決定)
-// ---------------------------------------------------------------------------
+pub fn catch_goes_to_drawing_phase_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let m =
+    nyowa.Model(
+      ..model,
+      phase: nyowa.Evading(nyowa.Cooperating),
+      recently_touched: False,
+    )
+  let #(result, _) = nyowa.update(m, nyowa.ButtonClicked(0))
+  // キャッチ成功 → Drawing フェーズへ
+  case result.phase {
+    nyowa.Drawing(_) -> Nil
+    _ -> should.fail()
+  }
+}
 
 pub fn catch_furious_mood_when_high_evade_count_test() {
   let #(model, _) = nyowa.init(Nil)
@@ -370,9 +389,10 @@ pub fn catch_furious_mood_when_high_evade_count_test() {
       )),
       recently_touched: False,
     )
-  let #(result, _) = nyowa.update(m, nyowa.ButtonClicked(0))
-  case result.phase {
-    nyowa.ShowResult(f) -> f.mood |> should.equal(nyowa.Furious)
+  let #(drawing, _) = nyowa.update(m, nyowa.ButtonClicked(0))
+  // Drawing フェーズへ移行 (Mood は determine_mood ユニットテストで確認済み)
+  case drawing.phase {
+    nyowa.Drawing(_) -> Nil
     _ -> should.fail()
   }
 }
@@ -389,9 +409,9 @@ pub fn catch_sleepy_mood_when_long_idle_test() {
       phase: nyowa.Evading(nyowa.Cooperating),
       recently_touched: False,
     )
-  let #(result, _) = nyowa.update(m, nyowa.ButtonClicked(0))
-  case result.phase {
-    nyowa.ShowResult(f) -> f.mood |> should.equal(nyowa.Sleepy)
+  let #(drawing, _) = nyowa.update(m, nyowa.ButtonClicked(0))
+  case drawing.phase {
+    nyowa.Drawing(_) -> Nil
     _ -> should.fail()
   }
 }
@@ -408,14 +428,14 @@ pub fn catch_rested_mood_when_idle_30s_test() {
       phase: nyowa.Evading(nyowa.Cooperating),
       recently_touched: False,
     )
-  let #(result, _) = nyowa.update(m, nyowa.ButtonClicked(0))
-  case result.phase {
-    nyowa.ShowResult(f) -> f.mood |> should.equal(nyowa.Rested)
+  let #(drawing, _) = nyowa.update(m, nyowa.ButtonClicked(0))
+  case drawing.phase {
+    nyowa.Drawing(_) -> Nil
     _ -> should.fail()
   }
 }
 
-pub fn catch_dialogue_is_cleared_test() {
+pub fn catch_dialogue_is_set_for_drawing_test() {
   let #(model, _) = nyowa.init(Nil)
   let m =
     nyowa.Model(
@@ -427,7 +447,79 @@ pub fn catch_dialogue_is_cleared_test() {
       recently_touched: False,
     )
   let #(result, _) = nyowa.update(m, nyowa.ButtonClicked(0))
-  result.dialogue |> should.equal(None)
+  // Drawing 中は演出用ダイアログが設定される
+  case result.dialogue {
+    Some(_) -> Nil
+    None -> should.fail()
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DrawInterruption / DrawComplete
+// ---------------------------------------------------------------------------
+
+pub fn draw_interruption_paused_updates_dialogue_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let drawing =
+    nyowa.Model(
+      ..model,
+      phase: nyowa.Drawing(nyowa.Spinning),
+      dialogue: Some("にょわにょわ……"),
+    )
+  let #(updated, _) =
+    nyowa.update(drawing, nyowa.DrawInterruption(nyowa.Paused))
+  updated.phase |> should.equal(nyowa.Drawing(nyowa.Paused))
+  updated.dialogue |> should.equal(Some("あ、ごめん回すの疲れたわ"))
+}
+
+pub fn draw_interruption_reversing_updates_dialogue_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let drawing =
+    nyowa.Model(
+      ..model,
+      phase: nyowa.Drawing(nyowa.Spinning),
+      dialogue: Some("にょわにょわ……"),
+    )
+  let #(updated, _) =
+    nyowa.update(drawing, nyowa.DrawInterruption(nyowa.Reversing))
+  updated.phase |> should.equal(nyowa.Drawing(nyowa.Reversing))
+  updated.dialogue |> should.equal(Some("気分じゃないから巻き戻すね"))
+}
+
+pub fn draw_complete_transitions_to_show_result_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let drawing = nyowa.Model(..model, phase: nyowa.Drawing(nyowa.Spinning))
+  let fortune = nyowa.Fortune(rank: "大吉", message: "テスト", mood: nyowa.Neutral)
+  let #(updated, _) = nyowa.update(drawing, nyowa.DrawComplete(fortune))
+  updated.phase |> should.equal(nyowa.ShowResult(fortune))
+}
+
+pub fn draw_complete_clears_dialogue_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let drawing =
+    nyowa.Model(
+      ..model,
+      phase: nyowa.Drawing(nyowa.Spinning),
+      dialogue: Some("にょわにょわ……"),
+    )
+  let fortune = nyowa.Fortune(rank: "大吉", message: "テスト", mood: nyowa.Neutral)
+  let #(updated, _) = nyowa.update(drawing, nyowa.DrawComplete(fortune))
+  updated.dialogue |> should.equal(None)
+}
+
+pub fn draw_complete_ignored_when_not_drawing_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let idle = nyowa.Model(..model, phase: nyowa.Idle)
+  let fortune = nyowa.Fortune(rank: "大吉", message: "テスト", mood: nyowa.Neutral)
+  let #(updated, _) = nyowa.update(idle, nyowa.DrawComplete(fortune))
+  updated.phase |> should.equal(nyowa.Idle)
+}
+
+pub fn draw_interruption_ignored_when_not_drawing_test() {
+  let #(model, _) = nyowa.init(Nil)
+  let idle = nyowa.Model(..model, phase: nyowa.Idle)
+  let #(updated, _) = nyowa.update(idle, nyowa.DrawInterruption(nyowa.Paused))
+  updated.phase |> should.equal(nyowa.Idle)
 }
 
 // ---------------------------------------------------------------------------

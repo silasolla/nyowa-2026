@@ -1,6 +1,7 @@
 import gleam/dynamic/decode
 import gleam/float
 import gleam/int
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import lustre
 import lustre/attribute
@@ -206,15 +207,38 @@ pub fn update(model: Model, msg: Msg) -> #(Model, effect.Effect(Msg)) {
         _ -> #(model, effect.none())
       }
 
+    DrawInterruption(new_state) ->
+      case model.phase {
+        Drawing(_) -> {
+          let dialogue = case new_state {
+            Paused -> Some("あ、ごめん回すの疲れたわ")
+            Reversing -> Some("気分じゃないから巻き戻すね")
+            _ -> model.dialogue
+          }
+          #(
+            Model(..model, phase: Drawing(new_state), dialogue: dialogue),
+            effect.none(),
+          )
+        }
+        _ -> #(model, effect.none())
+      }
+
+    DrawComplete(fortune) ->
+      case model.phase {
+        Drawing(_) -> #(
+          Model(..model, phase: ShowResult(fortune), dialogue: None),
+          effect.none(),
+        )
+        _ -> #(model, effect.none())
+      }
+
     DrawTick -> #(model, effect.none())
-    DrawInterruption(_) -> #(model, effect.none())
-    DrawComplete(_) -> #(model, effect.none())
     TransitionDone -> #(model, effect.none())
     GotRandom(_) -> #(model, effect.none())
   }
 }
 
-// キャッチ成功: 機嫌を判定しておみくじを選んで ShowResult へ
+// キャッチ成功: 機嫌を判定 → Drawing フェーズ → ShowResult
 fn do_catch(model: Model) -> #(Model, effect.Effect(Msg)) {
   let idle_ms = case model.first_interact_at {
     Some(t) -> t -. model.idle_started_at
@@ -222,7 +246,49 @@ fn do_catch(model: Model) -> #(Model, effect.Effect(Msg)) {
   }
   let mood = determine_mood(model.evade_count, idle_ms)
   let fortune = select_fortune(mood, random())
-  #(Model(..model, phase: ShowResult(fortune), dialogue: None), effect.none())
+  let rand = random()
+  case rand <. 0.15 {
+    // Instant (15%): 演出スキップ
+    True -> #(
+      Model(..model, phase: Drawing(Instant), dialogue: Some("回すのめんどいから直接出すね")),
+      delay_msg(DrawComplete(fortune), 900),
+    )
+    False ->
+      case rand <. 0.55 {
+        // Spinning (40%): 普通に回る
+        True -> #(
+          Model(..model, phase: Drawing(Spinning), dialogue: Some("にょわにょわ……")),
+          delay_msg(DrawComplete(fortune), 2800),
+        )
+        False ->
+          case rand <. 0.8 {
+            // Paused (25%): 途中で止まる
+            True -> #(
+              Model(
+                ..model,
+                phase: Drawing(Spinning),
+                dialogue: Some("にょわにょわ……"),
+              ),
+              effect.batch([
+                delay_msg(DrawInterruption(Paused), 1200),
+                delay_msg(DrawComplete(fortune), 3500),
+              ]),
+            )
+            // Reversing (20%): 逆回転
+            False -> #(
+              Model(
+                ..model,
+                phase: Drawing(Spinning),
+                dialogue: Some("にょわにょわ……"),
+              ),
+              effect.batch([
+                delay_msg(DrawInterruption(Reversing), 1200),
+                delay_msg(DrawComplete(fortune), 3400),
+              ]),
+            )
+          }
+      }
+  }
 }
 
 // hover / touchstart のハンドラ共通処理
@@ -498,6 +564,7 @@ pub fn view(model: Model) -> Element(Msg) {
       character_view(model),
       dialogue_view(model),
       button_view(model),
+      drawing_view(model),
       result_view(model),
     ],
   )
@@ -525,6 +592,10 @@ fn character_view(model: Model) -> Element(Msg) {
     Evading(Cooperating) -> #("（ ˘ω˘ ）", "animate-float")
     Evading(_) -> #("（ >ω< ）", "animate-shake")
     Caught -> #("（ ＞ω＜）！", "animate-shake")
+    Drawing(Instant) -> #("（ ˘ᴗ˘ ）", "animate-float")
+    Drawing(Spinning) -> #("（ ●ω● ）", "animate-shake")
+    Drawing(Paused) -> #("（ ˘ω˘ ）", "animate-breathe")
+    Drawing(Reversing) -> #("（ >ω< ）", "animate-shake")
     ShowResult(fortune) ->
       case fortune.mood {
         Furious -> #("（ >﹏< ）", "")
@@ -533,7 +604,6 @@ fn character_view(model: Model) -> Element(Msg) {
         Rested -> #("（ ˘ᴗ˘ ）", "animate-float")
         Sleepy -> #("（ -ω- ）zzZ", "animate-breathe")
       }
-    _ -> #("（ ˘ω˘ ）", "animate-float")
   }
   html.div([attribute.class("text-5xl leading-none " <> anim_class)], [
     html.text(char_text),
@@ -573,6 +643,7 @@ fn button_view(model: Model) -> Element(Msg) {
 
   case model.phase {
     ShowResult(_) -> html.div([], [])
+    Drawing(_) -> html.div([], [])
 
     Evading(Dodging(pos, count)) -> {
       let x = int.to_string(float.round(pos.x))
@@ -689,6 +760,59 @@ fn render_clone_button(
     ],
     [html.text("くじを引く")],
   )
+}
+
+fn drawing_view(model: Model) -> Element(Msg) {
+  case model.phase {
+    Drawing(state) -> {
+      let drum_names = ["大吉", "中吉", "小吉", "吉", "末吉", "凶", "大凶", "にょわ吉"]
+      let drum_items =
+        list.map(drum_names, fn(name) {
+          html.div(
+            [
+              attribute.class(
+                "h-14 flex items-center justify-center text-2xl font-bold text-pink",
+              ),
+            ],
+            [html.text(name)],
+          )
+        })
+      let anim_class = case state {
+        Spinning -> "animate-drum-spin"
+        Reversing -> "animate-drum-reverse"
+        Paused -> "animate-drum-pause"
+        Instant -> ""
+      }
+      let inner = html.div([attribute.class(anim_class)], drum_items)
+
+      html.div(
+        [attribute.class("flex flex-col items-center gap-3 animate-fade-in")],
+        [
+          html.div(
+            [
+              attribute.class(
+                "bg-white rounded-2xl shadow-lg overflow-hidden w-40 h-14",
+              ),
+            ],
+            case state {
+              Instant -> [
+                html.div(
+                  [
+                    attribute.class(
+                      "h-14 flex items-center justify-center text-2xl font-bold text-pink",
+                    ),
+                  ],
+                  [html.text("✨")],
+                ),
+              ]
+              _ -> [inner]
+            },
+          ),
+        ],
+      )
+    }
+    _ -> html.div([], [])
+  }
 }
 
 fn result_view(model: Model) -> Element(Msg) {
